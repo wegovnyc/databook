@@ -1,0 +1,30 @@
+User-agent: *
+Disallow: /research/digital-reform
+Disallow: /research/digital-reform?*
+
+User-agent: Baiduspider
+Disallow: /
+
+User-agent: MJ12bot
+Disallow: /
+
+Sitemap: https://databook.wegov.nyc/sitemap.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_01.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_02.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_03.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_04.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_05.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_06.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_07.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_08.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_09.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_10.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_11.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_12.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_13.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_14.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_15.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_16.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_17.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_18.xml
+Sitemap: https://databook.wegov.nyc/sitemap_people_19.xml

@@ -1,0 +1,794 @@
+/* ============================================================================
+   DATABOOK DESIGN SYSTEM — COMPONENTS
+   v1.0 · Unification pass · June 2026
+   ----------------------------------------------------------------------------
+   Canonical visual treatment for the §7 component inventory. Built on
+   databook-tokens.css + Bootstrap 5. Link AFTER both. Every class here is meant
+   to replace a cluster of inline styles / per-view <style> blocks. Data hooks
+   (.prj_stat, DataTable IDs, fapireq targets) are NOT touched — these are skins.
+   ========================================================================== */
+
+/* ---- 0. BASE ------------------------------------------------------------- */
+body {
+  font-family: var(--db-font-sans);
+  color: var(--db-text);
+  font-size: var(--db-text-base);
+  line-height: var(--db-leading-normal);
+  background: var(--db-bg);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, h5, h6 { font-family: var(--db-font-sans); color: var(--db-primary); font-weight: var(--db-weight-bold); line-height: var(--db-leading-tight); letter-spacing: var(--db-tracking-tight); }
+h1 { font-size: var(--db-text-3xl); }
+h2 { font-size: var(--db-text-2xl); }
+h3 { font-size: var(--db-text-xl); }
+h4 { font-size: var(--db-text-lg); }
+h5 { font-size: var(--db-text-md); font-weight: var(--db-weight-semibold); }
+h6 { font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); }
+a { color: var(--db-link); text-decoration: none; transition: color var(--db-transition); }
+a:hover { color: var(--db-link-hover); text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--db-accent); outline-offset: 2px; border-radius: var(--db-radius-sm); }
+
+.db-container { max-width: var(--db-container-max); margin-inline: auto; padding-inline: var(--db-space-3); }
+.db-eyebrow { font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold); letter-spacing: var(--db-tracking-caps); text-transform: uppercase; color: var(--db-text-muted); }
+.db-section-band { background: var(--db-bg-band); border-block: 1px solid var(--db-border); }
+.db-page-lead { font-size: var(--db-text-md); color: var(--db-text-muted); line-height: var(--db-leading-relaxed); max-width: 70ch; margin: 4px 0 0; }
+
+/* Contents / table-of-contents sidebar (profile pages) + anchor offset */
+.db-anchor { scroll-margin-top: calc(var(--db-header-h) + var(--db-submenu-h) + var(--db-space-3)); }
+.db-toc { position: sticky; top: calc(var(--db-header-h) + var(--db-submenu-h) + var(--db-space-2)); }
+.db-toc-title { font-size: var(--db-text-2xs); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-text-muted); font-weight: var(--db-weight-bold); padding: 0 var(--db-space-15); margin-bottom: var(--db-space-1); }
+.db-toc a { display: flex; align-items: center; justify-content: space-between; gap: var(--db-space-1); padding: var(--db-space-1) var(--db-space-15); font-size: var(--db-text-sm); color: var(--db-text-muted); border-left: 3px solid transparent; }
+.db-toc a:hover { color: var(--db-primary); text-decoration: none; background: var(--db-navy-050); }
+.db-toc a.is-active { color: var(--db-primary); font-weight: var(--db-weight-semibold); border-left-color: var(--db-accent); background: var(--db-navy-050); }
+
+/* ---- 1. DISCLAIMER BAR (required legal element) -------------------------- */
+.db-disclaimer {
+  background: var(--db-navy-900); color: var(--db-text-on-navy);
+  font-size: var(--db-text-2xs); text-align: center;
+  padding: var(--db-space-05) var(--db-space-3);
+  display: flex; align-items: center; justify-content: center; gap: var(--db-space-2);
+}
+.db-disclaimer a { color: var(--db-on-dark-accent); text-decoration: underline; }
+.db-disclaimer .db-disclaimer-close { margin-left: auto; background: none; border: 0; color: var(--db-text-on-navy-muted); cursor: pointer; font-size: var(--db-text-sm); line-height: 1; padding: 2px 6px; }
+.db-disclaimer .db-disclaimer-close:hover { color: var(--db-on-dark); }
+
+/* ---- 2. GLOBAL NAV BAR --------------------------------------------------- */
+.db-header {
+  background: var(--db-primary); color: var(--db-text-on-navy);
+  height: var(--db-header-h); position: sticky; top: 0; z-index: var(--db-z-header);
+  box-shadow: var(--db-shadow-sm);
+}
+.db-header .db-header-inner { display: flex; align-items: center; gap: var(--db-space-3); height: 100%; }
+.db-brand { font-weight: var(--db-weight-bold); font-size: var(--db-text-md); letter-spacing: var(--db-tracking-wide); color: var(--db-brand); white-space: nowrap; display: inline-flex; align-items: center; gap: var(--db-space-1); }
+.db-brand:hover { color: var(--db-brand-hover); text-decoration: none; }
+.db-brand .db-brand-mark { display: none; }
+.db-header .db-brand { font-size: var(--db-text-lg); }
+.db-nav { display: flex; align-items: stretch; gap: 0; margin-left: auto; height: 100%; }
+.db-nav-link {
+  display: inline-flex; align-items: center; padding: 0 var(--db-space-2);
+  color: var(--db-text-on-navy); font-size: var(--db-text-sm); font-weight: var(--db-weight-medium);
+  height: 100%; border-bottom: 3px solid transparent; transition: background var(--db-transition), border-color var(--db-transition);
+}
+.db-nav-link:hover { background: var(--db-navy-600); color: var(--db-on-dark); text-decoration: none; }
+.db-nav-link.is-active { color: var(--db-on-dark); border-bottom-color: var(--db-accent); background: var(--db-navy-600); }
+.db-header-search { position: relative; }
+.db-header-search input { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.22); color: var(--db-on-dark); border-radius: var(--db-radius-pill); padding: 5px 12px 5px 30px; font-size: var(--db-text-xs); width: 180px; transition: width var(--db-transition), background var(--db-transition); }
+.db-header-search input::placeholder { color: var(--db-text-on-navy-muted); }
+.db-header-search input:focus { background: rgba(255,255,255,0.2); width: 230px; outline: none; }
+.db-header-search .bi { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--db-text-on-navy-muted); font-size: 13px; }
+/* Typeahead dropdown — anchored under the header search input. */
+.db-header-search-dd {
+  position: absolute; top: calc(100% + 6px); right: 0; width: 340px; max-width: 80vw;
+  max-height: 70vh; overflow-y: auto; background: var(--db-white); color: var(--db-text);
+  border: 1px solid var(--db-border); border-radius: var(--db-radius);
+  box-shadow: var(--db-shadow-lg); z-index: var(--db-z-header); padding: var(--db-space-05) 0;
+}
+.db-suggest-item {
+  display: flex; flex-direction: column; gap: 1px; padding: var(--db-space-1) var(--db-space-2);
+  text-decoration: none; color: var(--db-text); cursor: pointer; border: 0;
+}
+.db-suggest-item:hover, .db-suggest-item.is-active { background: var(--db-navy-050); }
+.db-suggest-title { font-size: var(--db-text-sm); font-weight: var(--db-weight-medium); line-height: 1.25; }
+.db-suggest-meta { font-size: var(--db-text-xs); color: var(--db-text-muted); line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-nav-toggle { display: none; background: none; border: 0; color: var(--db-text-on-navy); font-size: 22px; padding: 0 var(--db-space-1); cursor: pointer; margin-left: auto; align-items: center; }
+
+/* Responsive nav — collapses to a slide-in drawer below the lg breakpoint. */
+@media (max-width: 991.98px) {
+  html, body { overflow-x: clip; }   /* contain the off-canvas nav drawer without breaking sticky (clip, NOT hidden) */
+  .db-nav-toggle { display: inline-flex; }
+  .db-header-search { display: none; }
+  .db-nav { position: fixed; top: var(--db-header-h); right: 0; bottom: 0; left: 0; margin: 0; height: auto; flex-direction: column; align-items: stretch; background: var(--db-primary); padding: var(--db-space-1); overflow-y: auto; transform: translateX(100%); transition: transform var(--db-transition-slow); z-index: var(--db-z-header); box-shadow: var(--db-shadow-lg); }
+  .db-nav.is-open { transform: translateX(0); }
+  .db-nav-link { height: auto; padding: var(--db-space-15) var(--db-space-2); border-bottom: 1px solid rgba(255,255,255,0.08); border-left: 3px solid transparent; }
+  .db-nav-link.is-active { background: var(--db-navy-600); border-bottom-color: rgba(255,255,255,0.08); border-left-color: var(--db-accent); }
+}
+
+/* ---- 3. SUBMENU BAR (one canonical structure for all 11 variants) -------- */
+.db-submenu {
+  background: var(--db-navy-600); position: sticky; top: var(--db-header-h);
+  z-index: var(--db-z-submenu); min-height: var(--db-submenu-h);
+  box-shadow: var(--db-shadow-sm);
+}
+.db-submenu-inner { display: flex; align-items: center; gap: var(--db-space-3); height: var(--db-submenu-h); overflow-x: auto; scrollbar-width: none; }
+.db-submenu-inner::-webkit-scrollbar { display: none; }
+.db-submenu-title { font-size: var(--db-text-xs); font-weight: var(--db-weight-bold); color: var(--db-on-dark); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); padding-right: var(--db-space-3); border-right: 1px solid rgba(255,255,255,0.18); white-space: nowrap; }
+.db-submenu-nav { display: flex; align-items: center; gap: var(--db-space-05); height: 100%; }
+.db-submenu-link {
+  display: inline-flex; align-items: center; height: 100%; padding: 0 var(--db-space-15);
+  color: var(--db-text-on-navy-muted); font-size: var(--db-text-xs); font-weight: var(--db-weight-medium);
+  border-bottom: 2px solid transparent; white-space: nowrap; transition: color var(--db-transition), border-color var(--db-transition);
+}
+.db-submenu-link:hover { color: var(--db-on-dark); text-decoration: none; }
+.db-submenu-link.is-active { color: var(--db-on-dark); border-bottom-color: var(--db-accent); }
+/* Submenu dropdown (e.g. "More …" overflow) — same idiom as the dropdown tab */
+.db-submenu-dd { position: relative; display: inline-flex; height: 100%; }
+.db-submenu-dd > .db-submenu-link { gap: 5px; background: none; border: 0; cursor: pointer; font-family: inherit; font-size: var(--db-text-xs); font-weight: var(--db-weight-medium); line-height: 1; -webkit-appearance: none; appearance: none; }
+.db-submenu-dd .db-caret { font-size: 10px; transition: transform var(--db-transition); }
+.db-submenu-dd.is-open .db-caret { transform: rotate(180deg); }
+.db-submenu-dd.is-open > .db-submenu-link { color: var(--db-on-dark); }
+.db-submenu-menu { position: absolute; top: 100%; left: 0; min-width: 210px; background: var(--db-white); border: 1px solid var(--db-border); border-radius: 0 0 var(--db-radius) var(--db-radius); box-shadow: var(--db-shadow-lg); padding: var(--db-space-05); z-index: var(--db-z-overlay); display: none; }
+.db-submenu-dd.is-open .db-submenu-menu { display: block; }
+.db-submenu-menu a { display: flex; align-items: center; gap: var(--db-space-1); padding: var(--db-space-1) var(--db-space-15); font-size: var(--db-text-sm); color: var(--db-text); border-radius: var(--db-radius-sm); white-space: nowrap; }
+.db-submenu-menu a .bi { color: var(--db-gray-500); font-size: 14px; width: 16px; }
+.db-submenu-menu a:hover { background: var(--db-navy-050); color: var(--db-primary); text-decoration: none; }
+.db-submenu-menu a.is-active { background: var(--db-navy-100); color: var(--db-primary); font-weight: var(--db-weight-semibold); }
+/* Right-aligned search slot inside the submenu bar */
+.db-submenu-search { margin-left: auto; position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; }
+.db-submenu-search .bi-search { position: absolute; left: 10px; color: var(--db-text-on-navy-muted); font-size: 13px; pointer-events: none; }
+.db-submenu-search input { background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.20); color: var(--db-on-dark); border-radius: var(--db-radius-pill); padding: 5px 12px 5px 30px; font-size: var(--db-text-xs); width: 190px; transition: width var(--db-transition), background var(--db-transition); }
+.db-submenu-search input::placeholder { color: var(--db-text-on-navy-muted); }
+.db-submenu-search input:focus { outline: none; background: rgba(255,255,255,0.18); width: 240px; }
+
+/* ---- 4. BREADCRUMBS ------------------------------------------------------ */
+.db-breadcrumb { display: flex; align-items: center; gap: var(--db-space-1); font-size: var(--db-text-xs); color: var(--db-text-muted); padding: var(--db-space-15) 0; flex-wrap: wrap; }
+.db-breadcrumb a { color: var(--db-link); }
+.db-breadcrumb .db-breadcrumb-sep { color: var(--db-gray-400); }
+.db-breadcrumb .is-current { color: var(--db-text); font-weight: var(--db-weight-medium); }
+
+/* ---- 5. PROFILE HEADER (unifies orgheader / distheader / titleheader) ----
+   One parameterized block. Logo optional (slot collapses). Works 2-col w/ logo
+   or full-width w/o. Stats row + actions + tabs are all optional children. */
+.db-profile-header { background: var(--db-white); border-bottom: 1px solid var(--db-border); }
+.db-profile-header-top { display: flex; gap: var(--db-space-3); align-items: flex-start; padding: var(--db-space-3) 0; }
+.db-profile-logo { flex: 0 0 auto; width: 84px; height: 84px; border-radius: var(--db-radius); border: 1px solid var(--db-border); background: var(--db-gray-050); display: grid; place-items: center; overflow: hidden; }
+.db-profile-logo img { width: 100%; height: 100%; object-fit: contain; padding: 8px; }
+.db-profile-main { flex: 1 1 auto; min-width: 0; }
+.db-profile-kicker { display: flex; align-items: center; gap: var(--db-space-1); margin-bottom: 4px; }
+.db-profile-title { font-size: var(--db-text-2xl); color: var(--db-primary); font-weight: var(--db-weight-bold); margin: 0 0 4px; line-height: var(--db-leading-tight); }
+.db-profile-subtitle { color: var(--db-text-muted); font-size: var(--db-text-sm); margin: 0; }
+.db-profile-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--db-space-1); }
+.db-profile-meta { display: flex; flex-wrap: wrap; gap: var(--db-space-1) var(--db-space-3); margin-top: var(--db-space-2); font-size: var(--db-text-xs); color: var(--db-text-muted); }
+.db-profile-meta .db-meta-item { display: inline-flex; align-items: center; gap: 6px; }
+.db-profile-meta .db-meta-item .bi { color: var(--db-gray-500); }
+.db-profile-meta .db-meta-item strong { color: var(--db-text); font-weight: var(--db-weight-semibold); }
+
+/* ---- 6. STAT / METRIC CARD ----------------------------------------------- */
+.db-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--db-space-2); }
+.db-stat {
+  background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius);
+  padding: var(--db-space-2); position: relative; overflow: hidden;
+}
+.db-stat::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--db-accent); opacity: 0; transition: opacity var(--db-transition); }
+.db-stat.is-accent::before { opacity: 1; }
+.db-stat-label { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-text-muted); display: flex; align-items: center; gap: 5px; }
+.db-stat-value { font-size: var(--db-text-2xl); font-weight: var(--db-weight-bold); color: var(--db-primary); line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.db-stat-value.is-loading { color: transparent; border-radius: var(--db-radius-sm); background: linear-gradient(90deg, var(--db-gray-100) 25%, var(--db-gray-200) 50%, var(--db-gray-100) 75%); background-size: 200% 100%; animation: dbShimmer 1.3s infinite; width: 70%; }
+.db-stat-sub { font-size: var(--db-text-2xs); color: var(--db-text-muted); margin-top: 2px; }
+.db-stat-delta { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; margin-top: 6px; }
+.db-stat-delta.is-up { color: var(--db-success-fg); }
+.db-stat-delta.is-down { color: var(--db-danger-fg); }
+@keyframes dbShimmer { to { background-position: -200% 0; } }
+
+/* ---- 7. DATA TABLES (one template for all DataTables surfaces) ----------- */
+.db-table-wrap { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); overflow: hidden; }
+.db-table-toolbar { display: flex; align-items: center; gap: var(--db-space-2); padding: var(--db-space-15) var(--db-space-2); border-bottom: 1px solid var(--db-border); flex-wrap: wrap; }
+.db-table-toolbar .db-table-count { font-size: var(--db-text-xs); color: var(--db-text-muted); }
+.db-table-toolbar .db-table-count strong { color: var(--db-text); }
+.db-table-toolbar .db-spacer { margin-left: auto; }
+table.db-table { width: 100%; border-collapse: collapse; font-size: var(--db-text-sm); margin: 0; }
+table.db-table thead th {
+  background: var(--db-gray-050); color: var(--db-gray-700); text-align: left;
+  font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold); text-transform: uppercase; letter-spacing: var(--db-tracking-wide);
+  padding: var(--db-space-1) var(--db-space-2); border-bottom: 2px solid var(--db-border); white-space: nowrap; position: sticky; top: 0;
+}
+table.db-table thead th.is-sortable { cursor: pointer; }
+table.db-table thead th.is-sortable::after { content: "\2195"; color: var(--db-gray-400); margin-left: 5px; font-size: 11px; }
+table.db-table thead th.is-sorted-asc::after { content: "\2191"; color: var(--db-primary); }
+table.db-table thead th.is-sorted-desc::after { content: "\2193"; color: var(--db-primary); }
+table.db-table thead th a { color: inherit; text-decoration: none; }
+table.db-table thead th a:hover { color: var(--db-primary); text-decoration: none; }
+table.db-table tbody td { padding: var(--db-space-1) var(--db-space-2); border-bottom: 1px solid var(--db-gray-200); color: var(--db-text); vertical-align: middle; }
+table.db-table tbody tr { transition: background var(--db-transition); }
+table.db-table tbody tr:hover { background: var(--db-navy-050); }
+table.db-table tbody tr.is-selected { background: var(--db-navy-100); }
+table.db-table .db-num { text-align: right; font-variant-numeric: tabular-nums; }
+table.db-table.db-table-striped tbody tr:nth-child(even) { background: var(--db-gray-050); }
+table.db-table.db-table-striped tbody tr:nth-child(even):hover { background: var(--db-navy-050); }
+.db-table-footer { display: flex; align-items: center; justify-content: space-between; padding: var(--db-space-15) var(--db-space-2); border-top: 1px solid var(--db-border); font-size: var(--db-text-xs); color: var(--db-text-muted); flex-wrap: wrap; gap: var(--db-space-1); }
+
+/* ---- 7b. DATATABLES BRIDGE ----------------------------------------------
+   jQuery DataTables generates the toolbar/search/info/pagination chrome. Add
+   class "db-table" to the <table>, then drive layout with the `dom` string in
+   Engineering Notes; these rules skin DataTables' generated nodes to match. */
+.dataTables_wrapper { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); overflow: hidden; }
+.dataTables_wrapper .db-table-toolbar, .dataTables_wrapper .db-table-footer { background: var(--db-white); }
+.dataTables_wrapper .dataTables_filter { margin: 0; }
+.dataTables_wrapper .dataTables_filter label { font-size: 0; display: inline-flex; align-items: center; }
+.dataTables_wrapper .dataTables_filter input { margin: 0; font-size: var(--db-text-sm); padding: 7px 11px 7px 11px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); min-width: 220px; }
+.dataTables_wrapper .dataTables_filter input:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
+.dataTables_wrapper .dataTables_length { font-size: var(--db-text-xs); color: var(--db-text-muted); }
+.dataTables_wrapper .dataTables_length select { font-size: var(--db-text-xs); padding: 4px 8px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); margin: 0 4px; }
+.dataTables_wrapper .dataTables_info { font-size: var(--db-text-xs); color: var(--db-text-muted); padding: 0; }
+.dataTables_wrapper .dataTables_paginate { display: inline-flex; gap: 2px; }
+.dataTables_wrapper .dataTables_paginate .paginate_button { min-width: 32px; height: 32px; padding: 0 8px !important; font-size: var(--db-text-xs); color: var(--db-link) !important; border: 1px solid var(--db-border) !important; background: var(--db-white) !important; border-radius: var(--db-radius-sm); margin: 0; display: inline-flex; align-items: center; justify-content: center; }
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover { background: var(--db-navy-050) !important; border-color: var(--db-border) !important; color: var(--db-link-hover) !important; }
+.dataTables_wrapper .dataTables_paginate .paginate_button.current { background: var(--db-primary) !important; color: var(--db-on-dark) !important; border-color: var(--db-primary) !important; }
+.dataTables_wrapper .dataTables_paginate .paginate_button.disabled { color: var(--db-gray-400) !important; pointer-events: none; }
+table.dataTable.db-table { border-collapse: collapse !important; }
+table.dataTable.db-table thead th.sorting::after, table.dataTable.db-table thead th.sorting_asc::after, table.dataTable.db-table thead th.sorting_desc::after { color: var(--db-primary); }
+
+/* ---- 8. SEARCH + AUTOCOMPLETE -------------------------------------------- */
+.db-search { position: relative; display: inline-flex; align-items: center; width: 100%; max-width: 360px; }
+.db-search .bi-search { position: absolute; left: 12px; color: var(--db-gray-500); font-size: 14px; pointer-events: none; }
+.db-search input { width: 100%; padding: 8px 12px 8px 34px; font-size: var(--db-text-sm); border: 1px solid var(--db-border-strong); border-radius: var(--db-radius); background: var(--db-white); color: var(--db-text); transition: border-color var(--db-transition), box-shadow var(--db-transition); }
+.db-search input:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
+.db-typeahead-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); box-shadow: var(--db-shadow-lg); z-index: var(--db-z-overlay); overflow: hidden; }
+.db-typeahead-item { padding: var(--db-space-1) var(--db-space-2); font-size: var(--db-text-sm); cursor: pointer; display: flex; align-items: center; gap: var(--db-space-1); }
+.db-typeahead-item:hover, .db-typeahead-item.is-active { background: var(--db-navy-050); }
+.db-typeahead-item .db-ta-type { margin-left: auto; font-size: var(--db-text-3xs); color: var(--db-text-muted); }
+
+/* ---- 9. FILTER CONTROLS -------------------------------------------------- */
+/* 9a. Horizontal filter bar (procurement idiom — the canonical one) */
+.db-filter-bar { display: flex; align-items: flex-end; gap: var(--db-space-2); flex-wrap: wrap; background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); padding: var(--db-space-2); }
+.db-field { display: flex; flex-direction: column; gap: 4px; }
+.db-field label { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); color: var(--db-gray-700); text-transform: uppercase; letter-spacing: var(--db-tracking-wide); }
+.db-field select, .db-field input { font-size: var(--db-text-sm); padding: 7px 10px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); background: var(--db-white); color: var(--db-text); min-width: 150px; }
+.db-field select:focus, .db-field input:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
+/* Native select reset → consistent custom chevron, system-wide */
+.db-field select, select.db-input {
+  -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer; padding-right: 30px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23757575' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 12px;
+}
+.db-field select:focus, select.db-input:focus { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23162e51' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); }
+/* 9b. Dark map filter panel */
+.db-map-panel { background: var(--db-primary); color: var(--db-text-on-navy); border-radius: var(--db-radius); padding: var(--db-space-2); box-shadow: var(--db-shadow-lg); }
+.db-map-panel h5 { color: var(--db-on-dark); font-size: var(--db-text-sm); text-transform: uppercase; letter-spacing: var(--db-tracking-wide); margin-bottom: var(--db-space-15); }
+.db-map-panel label { color: var(--db-text-on-navy-muted); font-size: var(--db-text-2xs); text-transform: uppercase; letter-spacing: var(--db-tracking-wide); }
+.db-map-panel select, .db-map-panel input { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: var(--db-on-dark); border-radius: var(--db-radius-sm); padding: 6px 9px; font-size: var(--db-text-sm); width: 100%; }
+.db-map-panel select { -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer; padding-right: 28px; background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 9px center; background-size: 12px; }
+.db-map-panel select option { color: var(--db-gray-900); }
+
+/* 9c. MAP OVERLAY CONTROLS (floating, light) — used over Mapbox/SVG maps -----
+   Position these inside a position:relative map stage. */
+/* Floating address/search pill */
+.db-map-search { position: absolute; z-index: 19; display: flex; align-items: center; gap: 6px; background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius-pill); box-shadow: var(--db-shadow-md); padding: 5px 6px 5px 14px; width: 340px; max-width: calc(100% - 32px); }
+.db-map-search .bi-search { color: var(--db-gray-500); font-size: 15px; flex: 0 0 auto; }
+.db-map-search input { flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: none; font-size: var(--db-text-sm); color: var(--db-text); }
+.db-map-search input::placeholder { color: var(--db-gray-500); }
+.db-map-search .db-map-search-go { flex: 0 0 auto; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--db-primary); color: var(--db-on-dark); cursor: pointer; display: grid; place-items: center; }
+.db-map-search .db-map-search-go:hover { background: var(--db-navy-900); }
+/* typeahead.js wraps the input in a .twitter-typeahead span — let it fill the pill */
+.db-map-search .twitter-typeahead { flex: 1 1 auto; min-width: 0; display: flex !important; }
+.db-map-search .tt-input, .db-map-search .tt-hint { width: 100%; border: 0; outline: none; background: none; font-size: var(--db-text-sm); color: var(--db-text); }
+.db-map-search .tt-hint { color: var(--db-gray-400); }
+.db-map-search .tt-menu { position: absolute; top: calc(100% + 6px); left: 0; width: 320px; max-width: 86vw; background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); box-shadow: var(--db-shadow-lg); padding: var(--db-space-05); max-height: 320px; overflow-y: auto; z-index: 20; }
+.db-map-search .tt-suggestion { padding: var(--db-space-1) var(--db-space-15); font-size: var(--db-text-sm); color: var(--db-text); border-radius: var(--db-radius-sm); cursor: pointer; }
+.db-map-search .tt-suggestion:hover, .db-map-search .tt-suggestion.tt-cursor { background: var(--db-navy-050); color: var(--db-primary); }
+/* Overlay dropdown control (e.g. "Show District Boundaries") — wrap a .db-btn + menu */
+.db-map-control { position: absolute; z-index: 19; }
+.db-map-control-menu { position: absolute; top: calc(100% + 6px); right: 0; width: 248px; background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); box-shadow: var(--db-shadow-lg); padding: var(--db-space-15); display: none; max-height: 60vh; overflow-y: auto; }
+.db-map-control.is-open .db-map-control-menu { display: block; }
+.db-map-control-menu .db-map-control-label { font-size: var(--db-text-2xs); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-text-muted); font-weight: var(--db-weight-bold); margin: 0 0 6px; padding: 0 4px; }
+.db-map-control-row { display: flex; align-items: center; gap: 9px; padding: 7px 6px; border-radius: var(--db-radius-sm); font-size: var(--db-text-sm); color: var(--db-text); cursor: pointer; }
+.db-map-control-row:hover { background: var(--db-navy-050); }
+.db-map-control-row input { accent-color: var(--db-primary); width: 15px; height: 15px; flex: 0 0 auto; }
+.db-map-control-row .db-map-swatch { width: 13px; height: 13px; border-radius: 3px; border: 1.5px solid; margin-left: auto; flex: 0 0 auto; }
+/* Zoom stepper */
+.db-map-zoom { position: absolute; z-index: 15; display: flex; flex-direction: column; box-shadow: var(--db-shadow-md); border-radius: var(--db-radius-sm); overflow: hidden; }
+.db-map-zoom button { width: 38px; height: 38px; background: var(--db-white); border: 0; border-bottom: 1px solid var(--db-border); color: var(--db-gray-700); cursor: pointer; display: grid; place-items: center; }
+.db-map-zoom button:last-child { border-bottom: 0; }
+.db-map-zoom button:hover { background: var(--db-navy-050); color: var(--db-primary); }
+/* Attribution chip */
+.db-map-attr { position: absolute; bottom: 4px; left: 8px; z-index: 12; font-size: 10px; color: var(--db-gray-600); background: var(--db-on-dark-muted); padding: 1px 6px; border-radius: 3px; }
+
+/* ---- 10. BADGES / TAGS (rationalize .type-label + .tag-label + .badge) ---- */
+.db-badge { display: inline-flex; align-items: center; gap: 4px; font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); padding: 2px 9px; border-radius: var(--db-radius-pill); line-height: 1.5; white-space: nowrap; }
+.db-badge-neutral { background: var(--db-gray-100); color: var(--db-gray-700); }
+.db-badge-navy    { background: var(--db-navy-100); color: var(--db-primary); }
+.db-badge-success { background: var(--db-success-bg); color: var(--db-success-fg); }
+.db-badge-danger  { background: var(--db-danger-bg);  color: var(--db-danger-fg); }
+.db-badge-warning { background: var(--db-warning-bg); color: var(--db-warning-fg); }
+.db-badge-info    { background: var(--db-info-bg);    color: var(--db-info-fg); }
+.db-badge .db-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+/* Type-label = navy pill used as a categorical LABEL (not a button). */
+.db-type-label { display: inline-flex; align-items: center; padding: 3px 11px; border-radius: var(--db-radius-pill); background: var(--db-navy-100); color: var(--db-primary); font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); }
+/* Tag-label = lightweight inline muted tags, comma-feel without commas. */
+.db-tags { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.db-tag { font-size: var(--db-text-2xs); color: var(--db-gray-700); background: var(--db-gray-100); border-radius: var(--db-radius-sm); padding: 1px 7px; }
+
+/* ---- 11. BUTTONS (system: solid / outline / ghost / link) ---------------- */
+.db-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-family: var(--db-font-sans); font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); line-height: 1; padding: 9px 16px; border-radius: var(--db-radius-sm); border: 1px solid transparent; cursor: pointer; transition: background var(--db-transition), border-color var(--db-transition), color var(--db-transition); white-space: nowrap; }
+.db-btn:focus-visible { box-shadow: var(--db-shadow-focus); outline: none; }
+.db-btn-primary { background: var(--db-primary); color: var(--db-on-dark); }
+.db-btn-primary:hover { background: var(--db-navy-900); color: var(--db-on-dark); text-decoration: none; }
+.db-btn-primary:active { background: var(--db-navy-800); }
+.db-btn-outline { background: var(--db-white); color: var(--db-primary); border-color: var(--db-border-strong); }
+.db-btn-outline:hover { border-color: var(--db-primary); background: var(--db-navy-050); color: var(--db-primary); text-decoration: none; }
+.db-btn-ghost { background: transparent; color: var(--db-link); }
+.db-btn-ghost:hover { background: var(--db-navy-050); color: var(--db-link-hover); text-decoration: none; }
+.db-btn-sm { padding: 6px 11px; font-size: var(--db-text-xs); }
+.db-btn-lg { padding: 12px 22px; font-size: var(--db-text-base); }
+.db-btn-icon { padding: 8px; width: 36px; height: 36px; }
+.db-btn[disabled], .db-btn.is-disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+/* ---- 12. CARDS / LIST ITEMS ---------------------------------------------- */
+.db-card { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); transition: box-shadow var(--db-transition), border-color var(--db-transition); }
+.db-card.is-hoverable:hover { box-shadow: var(--db-shadow-md); border-color: var(--db-border-strong); }
+.db-card-body { padding: var(--db-space-2); }
+.db-card-title { font-size: var(--db-text-lg); color: var(--db-primary); font-weight: var(--db-weight-bold); margin: 0 0 4px; }
+/* List row — compact horizontal (notices idiom) */
+.db-list-row { display: flex; align-items: center; gap: var(--db-space-2); padding: var(--db-space-15) var(--db-space-2); border-bottom: 1px solid var(--db-gray-200); transition: background var(--db-transition); }
+.db-list-row:hover { background: var(--db-navy-050); }
+.db-list-row .db-list-date { flex: 0 0 auto; font-size: var(--db-text-2xs); color: var(--db-text-muted); width: 96px; font-variant-numeric: tabular-nums; }
+.db-list-row .db-list-main { flex: 1 1 auto; min-width: 0; }
+.db-list-row .db-list-main a { font-weight: var(--db-weight-semibold); color: var(--db-text); }
+.db-list-row .db-list-main a:hover { color: var(--db-link); }
+
+/* ---- 13. PAGINATION ------------------------------------------------------ */
+.db-pagination { display: inline-flex; align-items: center; gap: 2px; }
+.db-pagination .db-page { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 8px; font-size: var(--db-text-xs); color: var(--db-link); border: 1px solid var(--db-border); background: var(--db-white); border-radius: var(--db-radius-sm); cursor: pointer; }
+.db-pagination .db-page:hover { background: var(--db-navy-050); text-decoration: none; }
+.db-pagination .db-page.is-active { background: var(--db-primary); color: var(--db-on-dark); border-color: var(--db-primary); }
+.db-pagination .db-page.is-disabled { color: var(--db-gray-400); pointer-events: none; }
+
+/* ---- 13b. EXPLORER PATTERNS (facet select, chips, ranked list, toolbar, segmented) --
+   Standalone form/table patterns promoted from hand-built page markup. All token-driven. */
+
+/* Standalone styled select (same look as a .db-field select, usable outside a field). */
+.db-select { font-size: var(--db-text-sm); padding: 7px 30px 7px 10px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); background-color: var(--db-white); color: var(--db-text); min-width: 150px; -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer; background-repeat: no-repeat; background-position: right 10px center; background-size: 12px; background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23757575' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); }
+.db-select:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
+
+/* Removable filter chip + "clear all" affordance. */
+.db-chips { display: flex; align-items: center; gap: var(--db-space-1); flex-wrap: wrap; }
+.db-chip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--db-text-2xs); font-weight: var(--db-weight-medium); padding: 4px 6px 4px 10px; border-radius: var(--db-radius-pill); background: var(--db-navy-050); color: var(--db-primary); border: 1px solid var(--db-navy-100); }
+.db-chip-remove { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--db-gray-600); cursor: pointer; line-height: 1; }
+.db-chip-remove:hover { background: var(--db-navy-100); color: var(--db-primary); }
+.db-chip-clear { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); color: var(--db-link); background: none; border: 0; cursor: pointer; text-transform: uppercase; letter-spacing: var(--db-tracking-wide); }
+.db-chip-clear:hover { color: var(--db-link-hover); }
+
+/* Numbered name/value rows (the "Top N" card body). Value renders navy (money). */
+.db-ranked-list { display: flex; flex-direction: column; }
+.db-ranked-item { display: flex; align-items: baseline; gap: var(--db-space-15); padding: 8px 0; border-bottom: 1px solid var(--db-gray-100); }
+.db-ranked-item:last-child { border-bottom: 0; }
+.db-ranked-rank { flex: 0 0 auto; min-width: 1.4em; font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold); color: var(--db-gray-500); }
+.db-ranked-name { flex: 1 1 auto; min-width: 0; font-size: var(--db-text-sm); color: var(--db-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-ranked-value { flex: 0 0 auto; font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); color: var(--db-primary); font-variant-numeric: tabular-nums; }
+
+/* Toolbar: result count / summary on the left, sort + actions on the right. */
+.db-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--db-space-2); flex-wrap: wrap; padding: var(--db-space-15) 0; }
+.db-toolbar-info { font-size: var(--db-text-sm); color: var(--db-text-muted); }
+.db-toolbar-info strong { color: var(--db-text); font-weight: var(--db-weight-semibold); }
+.db-toolbar-actions { display: flex; align-items: center; gap: var(--db-space-15); flex-wrap: wrap; }
+
+/* Segmented control (pill toggle group). */
+.db-segmented { display: inline-flex; gap: 2px; padding: 3px; background: var(--db-gray-100); border-radius: var(--db-radius); }
+.db-segmented-item { font-size: var(--db-text-xs); font-weight: var(--db-weight-semibold); padding: 5px 12px; border: 0; border-radius: var(--db-radius-sm); background: transparent; color: var(--db-gray-700); cursor: pointer; white-space: nowrap; }
+.db-segmented-item:hover { color: var(--db-primary); }
+.db-segmented-item.is-active { background: var(--db-white); color: var(--db-primary); box-shadow: var(--db-shadow-sm); }
+
+/* Expandable table row + detail panel (the drill-down affordance). */
+.db-row-toggle { display: inline-flex; padding: 0; border: 0; background: none; color: var(--db-gray-500); cursor: pointer; }
+.db-row-toggle .bi { transition: transform var(--db-transition); }
+.db-row-toggle.is-open .bi { transform: rotate(90deg); }
+.db-table tr.db-row-detail > td { background: var(--db-navy-050); padding: var(--db-space-2); }
+.db-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--db-space-15) var(--db-space-3); margin: 0; }
+.db-detail-grid dt { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); color: var(--db-gray-600); text-transform: uppercase; letter-spacing: var(--db-tracking-wide); margin-bottom: 2px; }
+.db-detail-grid dd { font-size: var(--db-text-sm); color: var(--db-text); margin: 0; }
+
+/* ---- 14. LOADERS (one spinner + one skeleton) ---------------------------- */
+.db-spinner { width: 22px; height: 22px; border: 3px solid var(--db-gray-200); border-top-color: var(--db-primary); border-radius: 50%; animation: dbSpin 0.7s linear infinite; }
+.db-spinner-lg { width: 40px; height: 40px; border-width: 4px; }
+@keyframes dbSpin { to { transform: rotate(360deg); } }
+.db-loading-overlay { position: absolute; inset: 0; background: var(--db-on-dark-muted); display: grid; place-items: center; z-index: 5; }
+.db-skeleton { background: linear-gradient(90deg, var(--db-gray-100) 25%, var(--db-gray-200) 50%, var(--db-gray-100) 75%); background-size: 200% 100%; animation: dbShimmer 1.3s infinite; border-radius: var(--db-radius-sm); }
+
+/* ---- 15. TABS / SECTION NAV (Bootstrap pills, restyled) ------------------ */
+.db-tabs { display: flex; align-items: center; gap: var(--db-space-05); border-bottom: 1px solid var(--db-border); }
+.db-tab { padding: 10px var(--db-space-2); font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); color: var(--db-text-muted); border-bottom: 3px solid transparent; cursor: pointer; transition: color var(--db-transition), border-color var(--db-transition); background: none; border-top: 0; border-inline: 0; }
+.db-tab:hover { color: var(--db-primary); }
+.db-tab.is-active { color: var(--db-primary); border-bottom-color: var(--db-accent); background: var(--db-navy-100); border-radius: var(--db-radius-sm) var(--db-radius-sm) 0 0; font-weight: var(--db-weight-bold); }
+/* Dropdown tab — a category menu rather than a flat tab (common on org profiles) */
+.db-tab-dd { position: relative; display: inline-flex; }
+.db-tab .db-caret { font-size: 10px; margin-left: 5px; transition: transform var(--db-transition); }
+.db-tab-dd.is-open .db-caret { transform: rotate(180deg); }
+.db-tab-menu { position: absolute; top: calc(100% - 1px); left: 0; min-width: 216px; background: var(--db-white); border: 1px solid var(--db-border); border-radius: 0 0 var(--db-radius) var(--db-radius); box-shadow: var(--db-shadow-lg); padding: var(--db-space-05); z-index: var(--db-z-overlay); display: none; }
+.db-tab-dd.is-open .db-tab-menu { display: block; }
+.db-tab-dd .db-tab.is-active .db-caret { color: var(--db-accent); }
+.db-tab-menu a { display: flex; align-items: center; gap: var(--db-space-1); padding: var(--db-space-1) var(--db-space-15); font-size: var(--db-text-sm); color: var(--db-text); border-radius: var(--db-radius-sm); white-space: nowrap; }
+.db-tab-menu a .bi { color: var(--db-gray-500); font-size: 14px; width: 16px; }
+.db-tab-menu a:hover { background: var(--db-navy-050); color: var(--db-primary); text-decoration: none; }
+.db-tab-menu a.is-active { background: var(--db-navy-100); color: var(--db-primary); font-weight: var(--db-weight-semibold); }
+.db-tab-menu a.is-active .bi { color: var(--db-primary); }
+/* Tab bar wrapper — adds top spacing under the profile header. Tabs wrap on narrow
+   viewports (no overflow container, so the absolute .db-tab-menu dropdowns aren't clipped). */
+.db-tabs-wrap { margin-top: var(--db-space-2); }
+.db-tabs-wrap .db-tabs { flex-wrap: wrap; row-gap: 0; }
+/* Horizontal-scroll variant for long FLAT navs (e.g. notices, 11 sections) that
+   would otherwise wrap to several rows. Only safe without dropdowns — overflow-x
+   clips the absolute .db-tab-menu — so don't use on org/school navs. */
+.db-tabs-wrap.is-scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.db-tabs-wrap.is-scroll .db-tabs { flex-wrap: nowrap; min-width: max-content; }
+.db-tabs-wrap.is-scroll::-webkit-scrollbar { height: 6px; }
+.db-tabs-wrap.is-scroll::-webkit-scrollbar-thumb { background: var(--db-gray-300); border-radius: 3px; }
+
+/* ---- 16. METADATA KEY/VALUE (unifies flex-rows + tables) ------------------ */
+.db-meta-list { display: grid; grid-template-columns: max-content 1fr; gap: var(--db-space-1) var(--db-space-3); font-size: var(--db-text-sm); }
+.db-meta-list dt { color: var(--db-text-muted); font-weight: var(--db-weight-medium); }
+.db-meta-list dd { margin: 0; color: var(--db-text); font-weight: var(--db-weight-medium); }
+.db-meta-list dd.is-mono { font-family: var(--db-font-mono); font-size: var(--db-text-xs); }
+
+/* ---- 17. SHARE / FEED LINKS ---------------------------------------------- */
+.db-icon-btn { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: var(--db-radius-sm); border: 1px solid var(--db-border); background: var(--db-white); color: var(--db-gray-700); cursor: pointer; transition: all var(--db-transition); }
+.db-icon-btn:hover { border-color: var(--db-primary); color: var(--db-primary); background: var(--db-navy-050); }
+
+/* ---- 18. CHART CARD (one Chart.js container template) -------------------- */
+.db-chart-card { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); padding: var(--db-space-2); }
+.db-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--db-space-2); margin-bottom: var(--db-space-15); }
+.db-chart-title { font-size: var(--db-text-sm); font-weight: var(--db-weight-bold); color: var(--db-primary); text-transform: uppercase; letter-spacing: var(--db-tracking-wide); }
+.db-chart-legend { display: flex; gap: var(--db-space-2); font-size: var(--db-text-2xs); color: var(--db-text-muted); }
+.db-chart-legend .db-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.db-chart-legend .db-legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
+/* Fixed height is REQUIRED for Chart.js maintainAspectRatio:false (else the canvas
+   collapses to its 150px default / grows unboundedly). 260px is a sensible default —
+   override per-instance with a taller height where needed. */
+.db-chart-body { position: relative; height: 260px; }
+.db-chart-card canvas { max-width: 100%; }
+
+/* ---- 19. EMPTY / ERROR / MISSING STATES (resilient fallbacks) ------------- */
+.db-empty { text-align: center; padding: var(--db-space-5) var(--db-space-3); color: var(--db-text-muted); }
+.db-empty .db-empty-icon { font-size: 32px; color: var(--db-gray-400); margin-bottom: var(--db-space-1); }
+.db-empty .db-empty-title { font-size: var(--db-text-md); font-weight: var(--db-weight-semibold); color: var(--db-gray-700); margin-bottom: 4px; }
+.db-empty .db-empty-text { font-size: var(--db-text-sm); }
+.db-missing-banner { display: flex; align-items: center; gap: var(--db-space-1); background: var(--db-warning-bg); border: 1px solid var(--db-warning-border); color: var(--db-warning-fg); border-radius: var(--db-radius); padding: var(--db-space-15) var(--db-space-2); font-size: var(--db-text-sm); }
+.db-missing-banner .bi { font-size: 18px; }
+
+/* ---- 21. ALERTS / FLASH MESSAGES (Laravel session flash) ----------------
+   Maps to session('success'|'error'|'warning'|'status') + @error bags. */
+.db-alert { display: flex; align-items: flex-start; gap: var(--db-space-15); padding: var(--db-space-15) var(--db-space-2); border-radius: var(--db-radius); border: 1px solid; font-size: var(--db-text-sm); }
+.db-alert .bi { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+.db-alert .db-alert-body { flex: 1 1 auto; min-width: 0; }
+.db-alert .db-alert-body strong { font-weight: var(--db-weight-bold); }
+.db-alert .db-alert-close { background: none; border: 0; cursor: pointer; color: inherit; opacity: 0.6; font-size: var(--db-text-md); line-height: 1; padding: 0 2px; }
+.db-alert .db-alert-close:hover { opacity: 1; }
+.db-alert-success { background: var(--db-success-bg); border-color: var(--db-success-border); color: var(--db-success-fg); }
+.db-alert-danger  { background: var(--db-danger-bg);  border-color: var(--db-danger-border); color: var(--db-danger-fg); }
+.db-alert-warning { background: var(--db-warning-bg); border-color: var(--db-warning-border); color: var(--db-warning-fg); }
+.db-alert-info    { background: var(--db-info-bg);    border-color: var(--db-info-border); color: var(--db-info-fg); }
+
+/* ---- 22. FORM CONTROLS + VALIDATION STATES ------------------------------
+   .db-field already wraps label+control (section 9). These add help text,
+   error/success states, and a Bootstrap .is-invalid/.is-valid bridge so
+   Laravel's @error('field') hooks light up without extra markup. */
+.db-field .db-field-help { font-size: var(--db-text-2xs); color: var(--db-text-muted); }
+.db-field .db-field-error { font-size: var(--db-text-2xs); color: var(--db-danger-fg); display: inline-flex; align-items: center; gap: 4px; }
+.db-field.is-invalid input, .db-field.is-invalid select, .db-field input.is-invalid, .db-field select.is-invalid,
+input.db-input.is-invalid, select.db-input.is-invalid { border-color: var(--db-danger); }
+.db-field.is-invalid input:focus, input.db-input.is-invalid:focus { box-shadow: 0 0 0 3px var(--db-danger-bg); }
+.db-field.is-valid input, .db-field input.is-valid, input.db-input.is-valid { border-color: var(--db-success); }
+.db-field .db-required { color: var(--db-danger); margin-left: 2px; }
+/* Standalone control (outside a .db-field wrapper) */
+.db-input { width: 100%; font-size: var(--db-text-sm); padding: 8px 11px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); background: var(--db-white); color: var(--db-text); }
+.db-input:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
+.db-input::placeholder { color: var(--db-gray-500); }
+.db-input[disabled] { background: var(--db-gray-100); color: var(--db-gray-500); cursor: not-allowed; }
+.db-input[readonly] { background: var(--db-gray-050); }
+
+/* ---- 20. FOOTER (required brand/legal) ----------------------------------- */
+.db-footer { background: var(--db-primary); color: var(--db-text-on-navy); padding: var(--db-space-5) 0 var(--db-space-3); margin-top: var(--db-space-6); }
+.db-footer a { color: var(--db-on-dark-accent); }
+.db-footer a.db-brand { color: var(--db-brand); }
+.db-footer a.db-brand:hover { color: var(--db-brand-hover); }
+.db-footer a:hover { color: var(--db-on-dark); }
+.db-footer h6 { color: var(--db-on-dark); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); font-size: var(--db-text-2xs); margin-bottom: var(--db-space-15); }
+.db-footer .db-footer-cols { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: var(--db-space-3); }
+.db-footer ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--db-text-sm); }
+.db-footer-legal { border-top: 1px solid rgba(255,255,255,0.14); margin-top: var(--db-space-3); padding-top: var(--db-space-2); display: flex; align-items: center; gap: var(--db-space-2); flex-wrap: wrap; font-size: var(--db-text-2xs); color: var(--db-text-on-navy-muted); }
+.db-footer-legal img { height: 24px; opacity: 0.9; }
+.db-newsletter { display: flex; gap: var(--db-space-1); margin-top: var(--db-space-1); }
+.db-newsletter input { flex: 1 1 auto; padding: 8px 12px; border-radius: var(--db-radius-sm); border: 1px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.1); color: var(--db-on-dark); font-size: var(--db-text-sm); }
+.db-newsletter input::placeholder { color: var(--db-text-on-navy-muted); }
+
+/* ---- 30. HOME HERO + DATASET ICON (home / City Briefing page) ------------- */
+/* Full-bleed: break out of the constrained .container so the navy band spans the
+   viewport like the header (calc(50% - 50vw) on each side). overflow:hidden keeps
+   the radial glow + the negative margins from spilling into a horizontal scrollbar. */
+.db-hero { background: var(--db-primary); padding: var(--db-space-4) 0; position: relative; overflow: hidden;
+  margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); }
+.db-hero > .inner_container { padding-inline: var(--db-space-3); }
+.db-hero-inner { display: flex; align-items: center; gap: var(--db-space-6); flex-wrap: wrap; position: relative; z-index: 1; }
+/* Centered intro variant (no search) */
+.db-hero-inner.is-centered { justify-content: center; text-align: center; }
+.db-hero-inner.is-centered .db-hero-copy { flex: 0 1 auto; }
+.db-hero-inner.is-centered .db-hero-copy h1,
+.db-hero-inner.is-centered .db-hero-copy p { margin-inline: auto; }
+/* Dismiss button (top-right) */
+.db-hero-close { position: absolute; top: var(--db-space-15); right: var(--db-space-2); z-index: 2;
+  background: none; border: 0; color: var(--db-text-on-navy-muted); font-size: 26px; line-height: 1;
+  cursor: pointer; padding: 2px 8px; border-radius: var(--db-radius-sm); }
+.db-hero-close:hover { color: var(--db-on-dark); background: rgba(255,255,255,0.1); }
+.db-hero-copy { flex: 1 1 460px; min-width: 0; }
+/* Optional logo / seal / badge above the eyebrow+title. */
+.db-hero-media { margin-bottom: var(--db-space-15); }
+.db-hero-media img, .db-hero-media svg { display: block; max-height: 64px; width: auto; }
+.db-hero-copy h1 { color: var(--db-on-dark); font-size: var(--db-text-4xl); line-height: var(--db-leading-tight); margin: 0 0 var(--db-space-15); }
+.db-hero-copy p { color: var(--db-text-on-navy-muted); font-size: var(--db-text-md); line-height: var(--db-leading-relaxed); max-width: 62ch; margin: 0; }
+.db-hero-search { flex: 0 0 380px; max-width: 100%; position: relative; display: flex; align-items: center;
+  background: var(--db-white); border-radius: var(--db-radius); box-shadow: var(--db-shadow-lg); padding: 0 var(--db-space-2); }
+.db-hero-search .bi { color: var(--db-gray-500); font-size: 18px; }
+.db-hero-search input { flex: 1; border: 0; outline: none; background: transparent; font-size: var(--db-text-md); padding: 14px var(--db-space-15); color: var(--db-text); }
+.db-hero-search input::placeholder { color: var(--db-text-muted); }
+@media (max-width: 840px) { .db-hero-search { flex-basis: 100%; } }
+
+/* Dataset icon tile (Our Data grid) */
+.ds-ico { width: 36px; height: 36px; border-radius: var(--db-radius-sm); background: var(--db-navy-100); color: var(--db-primary);
+  display: grid; place-items: center; font-size: 18px; flex: 0 0 auto; }
+
+/* ---- 31. DISTRICT PROFILE (districts.blade.php section + distsection) ------ */
+/* "View District Census Data ↗" link beside the title */
+.dp-census { font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); color: var(--db-link); white-space: nowrap; }
+.dp-census:hover { color: var(--db-primary); }
+/* Community-board / representative metadata — 3 cols of label↔value rows */
+.dp-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 var(--db-space-4); margin-top: var(--db-space-2); }
+.dp-meta .dp-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--db-space-2); padding: 7px 0; border-bottom: 1px solid var(--db-border); font-size: var(--db-text-sm); }
+.dp-meta .dp-label { color: var(--db-text-muted); font-weight: var(--db-weight-medium); white-space: nowrap; }
+.dp-meta .dp-value { color: var(--db-text); font-weight: var(--db-weight-medium); text-align: right; word-break: break-word; }
+.dp-meta .dp-value:empty::before { content: "—"; color: var(--db-gray-400); }
+@media (max-width: 760px) { .dp-meta { grid-template-columns: 1fr; } }
+/* Facilities (and other section) filter grid — 4 equal selects */
+.dp-filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--db-space-2); margin: var(--db-space-2) 0 var(--db-space-3); }
+@media (max-width: 760px) { .dp-filters { grid-template-columns: repeat(2, 1fr); } }
+/* Expandable FacDB child-row detail */
+tr.fac-detail > td, tr.child-row > td { background: var(--db-navy-050); }
+
+/* ===== JOBS & EXAMS family components (design-handoff3 §23-27) ===== */
+/* ---- 23. DASHBOARD PANEL — fixed-height scrollable list panel ------------- */
+.db-panel { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); display: flex; flex-direction: column; overflow: hidden; }
+.db-panel-head { display: flex; align-items: center; gap: var(--db-space-1); padding: var(--db-space-15) var(--db-space-2); border-bottom: 1px solid var(--db-border); background: var(--db-gray-050); }
+.db-panel-head .db-panel-title { font-size: var(--db-text-sm); font-weight: var(--db-weight-bold); color: var(--db-primary); }
+.db-panel-head .db-panel-sub { font-size: var(--db-text-2xs); color: var(--db-text-muted); }
+.db-panel-head .db-badge { margin-left: 0; }
+.db-panel-head .db-panel-action { margin-left: auto; font-size: var(--db-text-xs); }
+.db-panel-body { flex: 1 1 auto; overflow-y: auto; }
+.db-panel-body.is-scroll { max-height: 440px; }
+.db-panel-fixed { height: 520px; }            /* dashboard "current openings" panels */
+.db-panel-fixed .db-panel-body { max-height: none; }
+
+/* ---- 24. COMPACT LIST ITEM — hover-reveal row (jobs, exams, titles) -------
+   Title + meta on the left, date on the right that swaps to actions on hover. */
+.db-list-item { display: flex; align-items: center; gap: var(--db-space-2); padding: 10px var(--db-space-2); border-bottom: 1px solid var(--db-gray-200); position: relative; transition: background var(--db-transition); }
+.db-list-item:last-child { border-bottom: 0; }
+.db-list-item:hover { background: var(--db-navy-050); }
+.db-list-item-main { flex: 1 1 auto; min-width: 0; }
+.db-list-item-title { font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); color: var(--db-primary); line-height: var(--db-leading-snug); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-list-item-title a { color: inherit; }
+.db-list-item-meta { font-size: var(--db-text-2xs); color: var(--db-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-list-item-meta .db-money { color: var(--db-success-fg); font-weight: var(--db-weight-semibold); }
+.db-list-item-aside { flex: 0 0 auto; font-size: var(--db-text-2xs); color: var(--db-text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.db-list-item-actions { display: none; gap: var(--db-space-05); flex: 0 0 auto; }
+.db-list-item:hover .db-list-item-actions { display: flex; }
+.db-list-item:hover .db-list-item-aside.is-swap { display: none; }
+
+/* ---- 25. FEATURE CARD — navy-gradient promo (exams "accepting now") ------- */
+.db-feature-card { position: relative; display: flex; flex-direction: column; gap: var(--db-space-15); background: linear-gradient(150deg, var(--db-primary) 0%, var(--db-navy-gradient) 100%); color: var(--db-text-on-navy); border-radius: var(--db-radius); padding: var(--db-space-2); overflow: hidden; }
+.db-feature-card .db-feature-status { align-self: flex-start; }
+.db-feature-card .db-feature-title { font-size: var(--db-text-md); font-weight: var(--db-weight-bold); color: var(--db-on-dark); line-height: var(--db-leading-snug); }
+.db-feature-card .db-feature-sub { font-size: var(--db-text-2xs); color: var(--db-text-on-navy-muted); }
+.db-feature-row { background: rgba(255,255,255,0.1); border-radius: var(--db-radius-sm); padding: 7px 11px; font-size: var(--db-text-sm); display: flex; align-items: center; gap: 6px; }
+.db-feature-row .db-money { color: var(--db-on-dark); font-weight: var(--db-weight-semibold); }
+.db-feature-row .db-deadline { color: var(--db-deadline-on-dark); font-weight: var(--db-weight-semibold); }
+.db-feature-actions { display: flex; gap: var(--db-space-1); margin-top: auto; }
+.db-feature-actions .db-btn-outline { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.3); color: var(--db-on-dark); }
+.db-feature-actions .db-btn-outline:hover { background: rgba(255,255,255,0.16); border-color: var(--db-on-dark); color: var(--db-on-dark); }
+
+/* ---- 26. FACETED FILTER SIDEBAR (jobs browser) --------------------------- */
+.db-layout-facets { display: grid; grid-template-columns: 280px 1fr; gap: var(--db-space-3); align-items: start; }
+.db-facets { position: sticky; top: calc(var(--db-header-h) + var(--db-submenu-h) + var(--db-space-2)); background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); padding: var(--db-space-2); display: flex; flex-direction: column; gap: var(--db-space-2); max-height: calc(100vh - var(--db-header-h) - var(--db-submenu-h) - var(--db-space-3)); overflow-y: auto; }
+.db-facet { display: flex; flex-direction: column; gap: var(--db-space-1); }
+.db-facet-label { font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-gray-700); }
+.db-facet-divider { border: 0; border-top: 1px solid var(--db-gray-200); margin: 2px 0; }
+/* Filter pills (toggle chips) */
+.db-filter-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.db-filter-pill { font-size: var(--db-text-2xs); font-weight: var(--db-weight-medium); padding: 5px 11px; border-radius: var(--db-radius-pill); border: 1px solid var(--db-border-strong); background: var(--db-white); color: var(--db-gray-700); cursor: pointer; transition: all var(--db-transition); }
+.db-filter-pill:hover { border-color: var(--db-primary); color: var(--db-primary); }
+.db-filter-pill.is-active { background: var(--db-primary); border-color: var(--db-primary); color: var(--db-on-dark); }
+/* Range slider (salary) */
+.db-range { width: 100%; }
+.db-range-display { font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); color: var(--db-primary); font-variant-numeric: tabular-nums; }
+.db-range input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 999px; background: var(--db-gray-300); outline: none; margin: 10px 0; }
+.db-range input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--db-primary); border: 2px solid var(--db-on-dark); box-shadow: var(--db-shadow-sm); cursor: pointer; }
+.db-range input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--db-primary); border: 2px solid var(--db-on-dark); box-shadow: var(--db-shadow-sm); cursor: pointer; }
+/* Mobile: collapse rail into a toggle drawer */
+.db-facets-toggle { display: none; }
+@media (max-width: 768px) {
+  .db-layout-facets { grid-template-columns: 1fr; }
+  .db-facets-toggle { display: inline-flex; }
+  .db-facets { position: static; max-height: none; display: none; }
+  .db-facets.is-open { display: flex; }
+}
+
+/* ---- 27. RESULTS HEADER (jobs browser) ----------------------------------- */
+.db-results-head { display: flex; align-items: center; gap: var(--db-space-2); flex-wrap: wrap; margin-bottom: var(--db-space-2); }
+.db-results-count { font-size: var(--db-text-sm); color: var(--db-text-muted); }
+.db-results-count strong { color: var(--db-text); }
+.db-results-head .db-spacer { margin-left: auto; }
+.db-active-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.db-active-filters .db-tag { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.db-active-filters .db-tag .bi { font-size: 11px; opacity: 0.7; }
+.db-active-filters .db-tag:hover { background: var(--db-navy-100); color: var(--db-primary); }
+/* Job card grid */
+.db-jobs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--db-space-2); }
+
+/* ===== v2 coverage components (design-handoff4 §28-30) ===== */
+/* Responsive table helper — wrap a <table> to scroll only the grid (see 10-responsive.md). */
+.db-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* ---- 28. AVATAR (people) ------------------------------------------------- */
+.db-avatar { flex: 0 0 auto; border-radius: 50%; background: var(--db-navy-100); color: var(--db-primary); display: grid; place-items: center; font-weight: var(--db-weight-bold); overflow: hidden; }
+.db-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.db-avatar-lg { width: 84px; height: 84px; font-size: var(--db-text-2xl); }
+.db-avatar-sm { width: 34px; height: 34px; font-size: var(--db-text-sm); }
+
+/* ---- 29. SEARCH RESULTS (global search) ---------------------------------- */
+.db-result { display: flex; align-items: flex-start; gap: var(--db-space-2); padding: var(--db-space-2); border-bottom: 1px solid var(--db-gray-200); transition: background var(--db-transition); }
+.db-result:hover { background: var(--db-navy-050); }
+.db-result-ico { flex: 0 0 auto; width: 38px; height: 38px; border-radius: var(--db-radius-sm); background: var(--db-navy-100); color: var(--db-primary); display: grid; place-items: center; font-size: 17px; }
+.db-result-main { flex: 1 1 auto; min-width: 0; }
+.db-result-title { font-size: var(--db-text-md); font-weight: var(--db-weight-semibold); color: var(--db-primary); }
+.db-result-title a { color: inherit; }
+.db-result-meta { font-size: var(--db-text-xs); color: var(--db-text-muted); margin-top: 2px; }
+.db-result-snippet { font-size: var(--db-text-sm); color: var(--db-text); margin-top: 4px; }
+.db-result-snippet mark { background: var(--db-accent-soft); color: inherit; padding: 0 2px; border-radius: 2px; }
+.db-result-aside { flex: 0 0 auto; }
+/* Type filter rail */
+.db-result-rail { display: flex; flex-direction: column; gap: 2px; }
+.db-result-rail .db-result-type { display: flex; align-items: center; gap: var(--db-space-1); padding: 8px var(--db-space-15); border-radius: var(--db-radius-sm); font-size: var(--db-text-sm); color: var(--db-text); cursor: pointer; border: 0; background: none; text-align: left; width: 100%; }
+.db-result-rail .db-result-type:hover { background: var(--db-navy-050); }
+.db-result-rail .db-result-type.is-active { background: var(--db-navy-100); color: var(--db-primary); font-weight: var(--db-weight-semibold); }
+.db-result-rail .db-result-type .count { margin-left: auto; font-size: var(--db-text-2xs); color: var(--db-text-muted); font-variant-numeric: tabular-nums; }
+
+/* ---- 30. ORG CHART (hierarchical tree) ----------------------------------- */
+/* Horizontal indented tree (scales to deep gov hierarchies better than a
+   centered node-graph). Each node is a row; children indent with a guide rail. */
+.db-orgchart { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); padding: var(--db-space-2); }
+.db-tree, .db-tree ul { list-style: none; margin: 0; padding: 0; }
+.db-tree ul { margin-left: 22px; border-left: 1px solid var(--db-border); padding-left: var(--db-space-2); }
+.db-tree li { margin: 4px 0; }
+.db-node { display: flex; align-items: center; gap: var(--db-space-15); padding: 8px var(--db-space-15); border: 1px solid var(--db-border); border-radius: var(--db-radius-sm); background: var(--db-white); transition: background var(--db-transition), border-color var(--db-transition); }
+.db-node:hover { background: var(--db-navy-050); border-color: var(--db-border-strong); }
+.db-node.is-root { background: var(--db-primary); border-color: var(--db-primary); color: var(--db-on-dark); }
+.db-node.is-root .db-node-name { color: var(--db-on-dark); }
+.db-node.is-root .db-node-meta { color: var(--db-text-on-navy-muted); }
+.db-node-toggle { flex: 0 0 auto; width: 18px; height: 18px; border: 0; background: none; cursor: pointer; color: var(--db-gray-500); display: grid; place-items: center; font-size: 12px; }
+.db-node.is-root .db-node-toggle { color: var(--db-text-on-navy-muted); }
+.db-node-ico { flex: 0 0 auto; width: 28px; height: 28px; border-radius: var(--db-radius-sm); background: var(--db-navy-100); color: var(--db-primary); display: grid; place-items: center; font-size: 14px; }
+.db-node.is-root .db-node-ico { background: rgba(255,255,255,0.16); color: var(--db-on-dark); }
+.db-node-main { flex: 1 1 auto; min-width: 0; }
+.db-node-name { font-size: var(--db-text-sm); font-weight: var(--db-weight-semibold); color: var(--db-primary); }
+.db-node-name a { color: inherit; }
+.db-node-meta { font-size: var(--db-text-2xs); color: var(--db-text-muted); }
+.db-node-stat { flex: 0 0 auto; font-size: var(--db-text-2xs); color: var(--db-text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.db-tree li.is-collapsed > ul { display: none; }
+.db-tree li.is-collapsed > .db-node .db-node-toggle { transform: rotate(-90deg); }
+
+/* Traditional connector-line org chart (top-down). Wrap in an overflow-x
+   container — gov hierarchies get wide. Classic nested-ul + pseudo connectors. */
+.db-orgtree-wrap { overflow-x: auto; padding: var(--db-space-3) var(--db-space-2); }
+.db-orgtree, .db-orgtree ul { display: flex; padding-top: 22px; position: relative; margin: 0; list-style: none; justify-content: center; }
+.db-orgtree { padding-top: 0; }
+.db-orgtree li { list-style: none; text-align: center; position: relative; padding: 22px var(--db-space-1) 0; }
+/* connectors: vertical down from parent, horizontals across siblings */
+.db-orgtree li::before, .db-orgtree li::after { content: ''; position: absolute; top: 0; right: 50%; border-top: 1.5px solid var(--db-border-strong); width: 50%; height: 22px; }
+.db-orgtree li::after { right: auto; left: 50%; border-left: 1.5px solid var(--db-border-strong); }
+.db-orgtree li:only-child::after, .db-orgtree li:only-child::before { display: none; }
+.db-orgtree li:only-child { padding-top: 22px; }
+.db-orgtree li:first-child::before, .db-orgtree li:last-child::after { border: 0 none; }
+.db-orgtree li:last-child::before { border-right: 1.5px solid var(--db-border-strong); }
+.db-orgtree ul::before { content: ''; position: absolute; top: 0; left: 50%; border-left: 1.5px solid var(--db-border-strong); width: 0; height: 22px; }
+.db-orgtree > li:first-child::before { display: none; }
+.db-orgnode { display: inline-flex; flex-direction: column; gap: 2px; width: 168px; padding: var(--db-space-15); border: 1px solid var(--db-border); border-radius: var(--db-radius-sm); background: var(--db-white); text-align: left; transition: border-color var(--db-transition), box-shadow var(--db-transition); }
+.db-orgnode:hover { border-color: var(--db-border-strong); box-shadow: var(--db-shadow-sm); }
+.db-orgnode.is-root { background: var(--db-primary); border-color: var(--db-primary); }
+.db-orgnode-name { font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold); color: var(--db-primary); line-height: var(--db-leading-snug); }
+.db-orgnode-name a { color: inherit; }
+.db-orgnode.is-root .db-orgnode-name { color: var(--db-on-dark); }
+.db-orgnode-meta { font-size: 10px; color: var(--db-text-muted); }
+.db-orgnode.is-root .db-orgnode-meta { color: var(--db-text-on-navy-muted); }
+.db-orgnode-stat { font-size: 10px; font-weight: var(--db-weight-semibold); color: var(--db-gray-700); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.db-orgnode.is-root .db-orgnode-stat { color: var(--db-on-dark-accent); }
+
+/* ===== v2 responsive sweep (design-handoff4 §10) — system-wide patterns ===== */
+@media (max-width: 768px) {
+  /* Wide DataTables scroll horizontally instead of clipping */
+  .db-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* Profile header wraps logo/actions below the title; tabs scroll */
+  .db-profile-header-top { flex-wrap: wrap; }
+  .db-tabs-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* Map floating controls stack full-width so search + boundary dropdown don't collide.
+     !important overrides the per-page inline top/left/right on the districts overlays. */
+  .db-map-search { left: var(--db-space-1) !important; right: var(--db-space-1) !important; width: auto !important; top: var(--db-space-1) !important; }
+  .db-map-control { left: var(--db-space-1) !important; right: var(--db-space-1) !important; top: calc(var(--db-space-1) + 54px) !important; }
+  .db-map-control .db-btn { width: 100%; }
+  .db-map-control-menu { width: 100%; }
+}
+
+/* ── Editorial prose (blog post body) ──────────────────────────────────
+   Readable measure (~70ch) for CMS/markdown HTML. Token-based rhythm. */
+.db-prose { max-width: 70ch; color: var(--db-text); font-size: var(--db-text-md); line-height: var(--db-leading-relaxed); }
+.db-prose > :first-child { margin-top: 0; }
+.db-prose p { margin: 0 0 var(--db-space-3); }
+.db-prose .lead { font-size: var(--db-text-lg); color: var(--db-text-muted); line-height: var(--db-leading-relaxed); }
+.db-prose h2 { font-size: var(--db-text-2xl); color: var(--db-primary); font-weight: var(--db-weight-bold); line-height: var(--db-leading-tight); margin: var(--db-space-4) 0 var(--db-space-2); }
+.db-prose h3 { font-size: var(--db-text-xl); color: var(--db-primary); font-weight: var(--db-weight-bold); line-height: var(--db-leading-tight); margin: var(--db-space-3) 0 var(--db-space-15); }
+.db-prose ul, .db-prose ol { margin: 0 0 var(--db-space-3); padding-left: var(--db-space-3); }
+.db-prose li { margin-bottom: var(--db-space-1); }
+.db-prose a { color: var(--db-link); }
+.db-prose a:hover { color: var(--db-link-hover); }
+.db-prose blockquote { margin: var(--db-space-3) 0; padding: var(--db-space-1) var(--db-space-3); border-left: 3px solid var(--db-accent); color: var(--db-text-muted); font-style: italic; }
+.db-prose img { max-width: 100%; height: auto; border-radius: var(--db-radius); margin: var(--db-space-3) 0; }
+.db-prose hr { border: 0; border-top: 1px solid var(--db-border); margin: var(--db-space-4) 0; }
+
+/* ============================================================================
+   ANALYSIS PRODUCT (orange) — marks pages that go beyond official normalized
+   data by adding analyst- / AI-generated signals. The rest of Databook is
+   official NYC open data; orange = "interpretation layer, verify before use".
+   ============================================================================ */
+.db-analysis-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold);
+    text-transform: uppercase; letter-spacing: var(--db-tracking-wide);
+    color: var(--db-brand); background: var(--db-brand-bg);
+    border: 1px solid var(--db-brand); border-radius: var(--db-radius-pill);
+    padding: 2px 10px; vertical-align: middle;
+}
+.db-analysis-banner {
+    display: flex; gap: var(--db-space-2); align-items: flex-start;
+    border: 1px solid var(--db-brand); border-left-width: 4px;
+    background: var(--db-brand-wash); border-radius: var(--db-radius);
+    padding: var(--db-space-2) var(--db-space-3); margin: var(--db-space-3) 0;
+}
+.db-analysis-banner > .bi { color: var(--db-brand); font-size: 1.15rem; line-height: 1.4; flex: 0 0 auto; }
+.db-analysis-banner .db-analysis-body { font-size: var(--db-text-sm); color: var(--db-text); }
+.db-analysis-banner .db-analysis-body strong { color: var(--db-brand); }
+
+/* Submenu "Digital Services Analysis" dropdown — orange pill toggle. The menu
+   is position:fixed (positioned by JS) so it escapes the submenu bar's
+   overflow-x:auto clipping context. */
+.db-submenu-analysis { display: inline-flex; align-items: center; height: 100%; }
+/* Looks like any other .db-submenu-link, but in the civic-orange wordmark color
+   to signal "Analysis product". Button reset only; sizing/padding/underline come
+   from the shared .db-submenu-link class on the same element. */
+.db-submenu-analysis .db-analysis-toggle {
+    gap: 5px; background: none; border: 0; border-bottom: 2px solid transparent;
+    cursor: pointer; font-family: inherit;
+    color: var(--db-brand); -webkit-appearance: none; appearance: none;
+}
+.db-submenu-analysis .db-analysis-toggle:hover { color: var(--db-brand-hover); }
+.db-submenu-analysis .db-analysis-toggle.is-active,
+.db-submenu-analysis .db-analysis-toggle[aria-expanded="true"] {
+    color: var(--db-brand); border-bottom-color: var(--db-brand);
+}
+.db-analysis-menu {
+    position: fixed; display: none; min-width: 230px; background: var(--db-white);
+    border: 1px solid var(--db-border); border-radius: var(--db-radius);
+    box-shadow: var(--db-shadow-lg); padding: var(--db-space-05);
+    z-index: var(--db-z-overlay, 1080);
+}
+.db-analysis-menu.is-open { display: block; }
+.db-analysis-menu a {
+    display: block; padding: var(--db-space-1) var(--db-space-15);
+    font-size: var(--db-text-sm); color: var(--db-text);
+    border-radius: var(--db-radius-sm); white-space: nowrap; text-decoration: none;
+}
+.db-analysis-menu a:hover { background: var(--db-brand-bg); color: var(--db-brand); }
+.db-analysis-menu a.is-active { background: var(--db-brand-bg); color: var(--db-brand); font-weight: var(--db-weight-semibold); }

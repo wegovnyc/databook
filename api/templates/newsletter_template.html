@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Databook Weekly - {{ edition_date }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .email-container {
+            max-width: 680px;
+            margin: 0 auto;
+            background: white;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #002D72 0%, #001a44 100%);
+            padding: 24px 32px;
+            text-align: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: #FF6319;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-icon svg {
+            width: 32px;
+            height: 32px;
+            fill: white;
+        }
+
+        .logo-text {
+            font-size: 32px;
+            font-weight: 700;
+            color: white;
+            letter-spacing: -0.5px;
+        }
+
+        .logo-text span {
+            color: #FF6319;
+        }
+
+        .tagline {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .edition-date {
+            color: #FF6319;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .quick-links {
+            background: #001a44;
+            padding: 12px 32px;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 8px 24px;
+        }
+
+        .quick-links a {
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .quick-links a:hover {
+            color: #FF6319;
+        }
+
+        .quick-links a.primary {
+            color: #FF6319;
+            font-weight: 600;
+        }
+
+        .stats-bar {
+            background: #f8f9fa;
+            padding: 16px 32px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #002D72;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .content {
+            padding: 32px;
+        }
+
+        .section {
+            margin-bottom: 32px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #FF6319;
+        }
+
+        .section-icon {
+            font-size: 20px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #002D72;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .headline-item {
+            padding: 16px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 4px solid #FF6319;
+        }
+
+        .headline-item.blue-accent {
+            border-left-color: #002D72;
+        }
+
+        .headline-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #002D72;
+            margin-bottom: 6px;
+        }
+
+        .headline-title a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .headline-title a:hover {
+            color: #FF6319;
+        }
+
+        .headline-meta {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .headline-meta a {
+            color: #FF6319;
+            text-decoration: none;
+        }
+
+        .headline-description {
+            font-size: 14px;
+            color: #444;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .data-table th {
+            background: #002D72;
+            color: white;
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        .data-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .data-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .data-table a {
+            color: #002D72;
+            text-decoration: none;
+        }
+
+        .data-table a:hover {
+            color: #FF6319;
+        }
+
+        .amount {
+            font-weight: 600;
+            color: #002D72;
+        }
+
+        .event-item {
+            display: flex;
+            gap: 16px;
+            padding: 12px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .event-item:last-child {
+            border-bottom: none;
+        }
+
+        .event-date {
+            min-width: 80px;
+            text-align: center;
+        }
+
+        .event-day {
+            font-size: 24px;
+            font-weight: 700;
+            color: #002D72;
+            line-height: 1;
+        }
+
+        .event-month {
+            font-size: 11px;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .event-time {
+            font-size: 11px;
+            color: #FF6319;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .event-details h4 {
+            font-size: 14px;
+            color: #002D72;
+            margin-bottom: 4px;
+        }
+
+        .event-details h4 a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .event-details h4 a:hover {
+            color: #FF6319;
+        }
+
+        .event-agency {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .event-agency a {
+            color: #FF6319;
+            text-decoration: none;
+        }
+
+        .procurement-item {
+            padding: 12px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .procurement-item:last-child {
+            border-bottom: none;
+        }
+
+        .procurement-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #002D72;
+            margin-bottom: 4px;
+        }
+
+        .procurement-title a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .procurement-title a:hover {
+            color: #FF6319;
+        }
+
+        .procurement-meta {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .procurement-meta a {
+            color: #FF6319;
+            text-decoration: none;
+        }
+
+        .watchlist-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .watchlist-item:last-child {
+            border-bottom: none;
+        }
+
+        .watch-icon {
+            font-size: 16px;
+            min-width: 24px;
+        }
+
+        .watch-content h4 {
+            font-size: 14px;
+            color: #002D72;
+            margin-bottom: 4px;
+        }
+
+        .watch-content p {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .footer {
+            background: #002D72;
+            padding: 24px 32px;
+            text-align: center;
+        }
+
+        .footer-logo {
+            color: white;
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .footer-logo span {
+            color: #FF6319;
+        }
+
+        .footer-tagline {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            margin-bottom: 16px;
+        }
+
+        .footer-links {
+            margin-bottom: 16px;
+        }
+
+        .footer-links a {
+            color: rgba(255, 255, 255, 0.8);
+            text-decoration: none;
+            font-size: 12px;
+            margin: 0 12px;
+        }
+
+        .footer-sources {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        @media (max-width: 600px) {
+            .stats-bar {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .quick-links {
+                padding: 12px 16px;
+            }
+
+            .content {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="email-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z" fill="white" />
+                    </svg>
+                </div>
+                <div class="logo-text">Databook<span>Weekly</span></div>
+            </div>
+            <div class="tagline">NYC Government Intelligence, Delivered</div>
+            <div class="edition-date">{{ edition_date }}</div>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="quick-links">
+            <a href="https://databook.nyc" class="primary">Databook.NYC</a>
+            <a href="https://a856-cityrecord.nyc.gov/">City Record</a>
+            <a href="https://passport.cityofnewyork.us/">PASSPort Public</a>
+            <a href="https://checkbooknyc.com/">Checkbook NYC</a>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-value">{{ stats.pending_comptroller_total | currency }}</div>
+                <div class="stat-label">Pending Comptroller</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">{{ stats.contracts_in_queue | default(0) }}</div>
+                <div class="stat-label">Contracts in Queue</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">{{ stats.notices_30_days | default(0) }}</div>
+                <div class="stat-label">Notices (30 days)</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">{{ "{:,}".format(stats.capital_projects | default(0)) }}</div>
+                <div class="stat-label">Capital Projects</div>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+
+            <!-- Headlines -->
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">📰</span>
+                    <span class="section-title">This Week's Headlines</span>
+                </div>
+
+                {% for h in headlines %}
+                <div class="headline-item{% if h.accent == 'blue' %} blue-accent{% endif %}">
+                    <div class="headline-title">
+                        {% if h.contract_url %}
+                        <a href="{{ h.contract_url }}">{{ h.headline }}</a>
+                        {% else %}
+                        {{ h.headline }}
+                        {% endif %}
+                    </div>
+                    {% if h.org_slug %}
+                    <div class="headline-meta">
+                        <a href="https://databook.nyc/o/{{ h.org_slug }}">View Agency Profile</a>
+                    </div>
+                    {% endif %}
+                    <div class="headline-description">{{ h.summary }}</div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Money Moves -->
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">💰</span>
+                    <span class="section-title">Money Moves</span>
+                </div>
+
+                <p style="font-size: 13px; color: #666; margin-bottom: 16px;">
+                    Top contracts pending approval · <a href="https://databook.nyc/procurement/contracts"
+                        style="color: #FF6319; text-decoration: none;">View all on Databook →</a>
+                </p>
+
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Contract</th>
+                            <th>Agency</th>
+                            <th style="text-align: right;">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for c in contracts %}
+                        <tr>
+                            <td><a href="https://databook.nyc/procurement/contract/{{ c.ctr_id }}">{{ c.title }}</a>
+                            </td>
+                            <td>{% if c.org_slug %}<a href="https://databook.nyc/o/{{ c.org_slug }}">{{ c.agency_acronym
+                                    }}</a>{% else %}{{ c.agency_acronym }}{% endif %}</td>
+                            <td style="text-align: right;" class="amount">{{ c.amount_formatted }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                <p style="font-size: 11px; color: #999; margin-top: 12px; text-align: right;">
+                    Pipeline total: {{ stats.pending_comptroller_total | currency }} pending Comptroller
+                </p>
+            </div>
+
+            <!-- Data Anomalies (For Journalists) -->
+            {% if anomalies %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">🔍</span>
+                    <span class="section-title">Data Anomalies</span>
+                </div>
+
+                <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                    Contracts worth a closer look
+                </p>
+
+                {% for a in anomalies %}
+                <div class="watchlist-item">
+                    <div class="watch-icon">{{ a.icon }}</div>
+                    <div class="watch-content">
+                        <h4>{% if a.ctr_id %}<a href="https://databook.nyc/procurement/contract/{{ a.ctr_id }}"
+                                style="color: #002D72; text-decoration: none;">{{ a.title }}</a>{% else %}{{ a.title
+                            }}{% endif %}</h4>
+                        <p>{{ a.detail }} · {{ a.agency }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Open Solicitations (For Vendors) -->
+            {% if solicitations %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">📢</span>
+                    <span class="section-title">Open Solicitations</span>
+                </div>
+
+                <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                    Bidding opportunities · <a href="https://passport.cityofnewyork.us"
+                        style="color: #FF6319; text-decoration: none;">Submit on PASSPort →</a>
+                </p>
+
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Opportunity</th>
+                            <th>Agency</th>
+                            <th style="text-align: right;">Due Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in solicitations %}
+                        <tr>
+                            <td>{% if s.request_id %}<a
+                                    href="https://a856-cityrecord.nyc.gov/RequestDetail/{{ s.request_id }}">{{ s.title
+                                    }}</a>{% else %}{{ s.title }}{% endif %}</td>
+                            <td>{% if s.org_slug %}<a href="https://databook.nyc/o/{{ s.org_slug }}">{{ s.agency_acronym
+                                    }}</a>{% else %}{{ s.agency_acronym }}{% endif %}</td>
+                            <td style="text-align: right;">{{ s.due_date }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <!-- Expiring Contracts (For Vendors) -->
+            {% if expiring %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">⏰</span>
+                    <span class="section-title">Expiring Soon</span>
+                </div>
+
+                <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                    Contracts ending in 90 days - potential rebid opportunities
+                </p>
+
+                {% for e in expiring %}
+                <div class="procurement-item">
+                    <div class="procurement-title">
+                        {% if e.ctr_id %}<a href="https://databook.nyc/procurement/contract/{{ e.ctr_id }}">{{ e.title
+                            }}</a>{% else %}{{ e.title }}{% endif %}
+                    </div>
+                    <div class="procurement-meta">
+                        {{ e.agency_acronym }} · {{ e.amount }} · Ends: {{ e.end_date }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Public Comments (For Activists) -->
+            {% if public_comments %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">🗣️</span>
+                    <span class="section-title">Make Your Voice Heard</span>
+                </div>
+
+                <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                    Agency rules open for public comment
+                </p>
+
+                {% for pc in public_comments %}
+                <div class="procurement-item">
+                    <div class="procurement-title">
+                        {% if pc.request_id %}<a
+                            href="https://a856-cityrecord.nyc.gov/RequestDetail/{{ pc.request_id }}">{{ pc.title
+                            }}</a>{% else %}{{ pc.title }}{% endif %}
+                    </div>
+                    <div class="procurement-meta">
+                        {{ pc.agency_acronym }} · {{ pc.notice_type }}{% if pc.deadline %} · Deadline: {{ pc.deadline
+                        }}{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                <p style="font-size: 11px; color: #002D72; margin-top: 12px;">
+                    💡 <strong>How to comment:</strong> Click the link, find "Submit Comment" or contact info
+                </p>
+            </div>
+            {% endif %}
+
+            <!-- Hearings & Meetings -->
+            {% if events %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">📅</span>
+                    <span class="section-title">Hearings & Meetings</span>
+                </div>
+
+                {% for e in events %}
+                <div class="event-item">
+                    <div class="event-date">
+                        <div class="event-day">{{ e.day }}</div>
+                        <div class="event-month">{{ e.month }}</div>
+                        {% if e.time %}<div class="event-time">{{ e.time }}</div>{% endif %}
+                    </div>
+                    <div class="event-details">
+                        <h4>{% if e.request_id %}<a
+                                href="https://a856-cityrecord.nyc.gov/RequestDetail/{{ e.request_id }}">{{ e.title
+                                }}</a>{% else %}{{ e.title }}{% endif %}</h4>
+                        <div class="event-agency">
+                            {% if e.org_slug %}<a href="https://databook.nyc/o/{{ e.org_slug }}">{{ e.agency_acronym
+                                }}</a>{% else %}{{ e.agency_acronym }}{% endif %}
+                            {% if e.section %} · {{ e.section }}{% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- New Procurements -->
+            {% if procurements %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">📋</span>
+                    <span class="section-title">New Procurements</span>
+                </div>
+
+                {% for p in procurements %}
+                <div class="procurement-item">
+                    <div class="procurement-title">
+                        {% if p.request_id %}<a
+                            href="https://a856-cityrecord.nyc.gov/RequestDetail/{{ p.request_id }}">{{ p.title }}</a>{%
+                        else %}{{ p.title }}{% endif %}
+                    </div>
+                    <div class="procurement-meta">
+                        {% if p.org_slug %}<a href="https://databook.nyc/o/{{ p.org_slug }}">{{ p.agency_acronym
+                            }}</a>{% else %}{{ p.agency_acronym }}{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Watchlist -->
+            {% if watchlist %}
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-icon">👁️</span>
+                    <span class="section-title">Civic Watchlist</span>
+                </div>
+
+                {% for w in watchlist %}
+                <div class="watchlist-item">
+                    <div class="watch-icon">{{ w.icon }}</div>
+                    <div class="watch-content">
+                        <h4>{{ w.title }}</h4>
+                        <p>{{ w.description }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-logo">Databook<span>Weekly</span></div>
+            <div class="footer-tagline">Making NYC government data accessible to all</div>
+            <div class="footer-links">
+                <a href="https://databook.nyc">Home</a>
+                <a href="https://databook.nyc/about">About</a>
+                <a href="https://databook.nyc/mcp">API</a>
+            </div>
+            <div class="footer-sources">
+                Data sources: NYC City Record, PASSPort, NYC Open Data, Checkbook NYC<br>
+                © {{ year }} Databook.NYC
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

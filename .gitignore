@@ -1,0 +1,36 @@
+# Sensitive Configuration
+api/env.yaml
+app/.env
+.env
+
+# Local Artifacts
+.DS_Store
+*.log
+temp_deploy/
+.agent/
+.docker_tmp/
+
+# Docker volumes (if locally mapped)
+mysql-data/
+postgres-data/
+redis-data/
+tmp-data/
+shared_data/
+node_modules/
+app/node_modules/
+*.tar.gz
+*.pem
+*.sql
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+scripts/local-seed.sql
+/data-lake/
+
+# PHP dependencies (installed at build via composer)
+app/vendor/

@@ -1,0 +1,21 @@
+/node_modules
+/public/hot
+/public/storage
+/storage/*.key
+
+
+.env_
+.env.backup
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+npm-debug.log
+yarn-error.log
+sitemap_*.xml
+*.blade_*
+
+/public/calendar_demo.php
+.env
+# Playwright
+/test-results
+/playwright-report

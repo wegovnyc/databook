@@ -1,0 +1,30 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for MCP server
+RUN pip install --no-cache-dir \
+    mcp \
+    asyncpg \
+    starlette \
+    uvicorn \
+    aiohttp \
+    cachetools
+
+# Copy MCP server files
+COPY mcp_server.py .
+COPY serve_mcp.py .
+COPY modules/ ./modules/
+
+# Expose MCP port
+EXPOSE 8082
+
+# Run MCP server
+CMD ["uvicorn", "serve_mcp:app", "--host", "0.0.0.0", "--port", "8082"]

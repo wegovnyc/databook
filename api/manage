@@ -1,0 +1,55 @@
+from modules import autoload
+import re
+import sys
+import postgresql
+
+from config import Config
+from user import User
+
+def auth():
+    for _ in range(3):
+        pwd = input('Masterpass: ')
+        if User.pwd_hash(pwd) == Config.masterpass:
+            return True
+    return False
+
+def halt(msg):
+    print(msg)
+    sys.exit()
+
+
+    
+if __name__ == '__main__':
+    try:
+        cmd = sys.argv[1]
+    except Exception:
+        halt('Syntax:\n\tpython manage <command>\n\nAvailable commands list:\n\tpython manage --help')
+        
+    if cmd == '--help':
+        halt('Avaialble commands:\n\tuser:create\n\tuser:delete\n\tuser:newemail\n\tuser:newpassword\n\tuser:newapikey')
+        
+    try:
+        clname, method = cmd.split(':')
+        clname = clname.title()
+    except Exception:
+        halt('Command format malformed')
+        
+    if re.search('_', method):
+        halt('Method not exist')
+        
+    try:
+        cl = globals()[clname]
+        obj = cl()
+    except Exception as e:
+        #raise e
+        halt('Command not exist')
+
+    try:
+        m = getattr(obj, method)
+        if not auth():
+            halt('Wrong password')
+        res = m()
+        print(res if res else '')
+    except AttributeError as e:
+        raise e
+        halt('Method not exist')

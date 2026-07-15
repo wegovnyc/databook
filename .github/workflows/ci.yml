@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:   # allow manually running prod-smoke on demand
+
+jobs:
+  # ── Job 1: Pytest unit tests (no DB required) ───────────────
+  api-tests:
+    name: API Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install API dependencies
+        run: |
+          pip install -r dependencies
+          pip install pytest pytest-asyncio httpx
+      - name: Run pytest
+        run: python -m pytest tests/ -v --tb=short
+
+  # ── Job 2: Ephemeral full-stack smoke (replaces the staging deploy) ──
+  # Builds + boots the real stack in the runner and checks it comes up.
+  # No always-on box, no drift — tests the actual build per push/PR.
+  integration-smoke:
+    name: Integration Smoke (ephemeral stack)
+    runs-on: ubuntu-latest
+    needs: api-tests
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules needed — this smoke builds only api/app/nginx/postgres/redis
+        # (normalizer & newsletter are separate private submodules).
+      - name: Stub gitignored config the stack needs (CI only)
+        run: |
+          # api/env.yaml is gitignored (holds real creds); without it the bind
+          # mount becomes a directory and the api crashes. Use the committed
+          # non-secret CI fixture (db creds match the compose postgres defaults).
+          cp api/env.ci.yaml api/env.yaml
+          # newsletter service (private submodule, not started here) declares an
+          # env_file compose still validates — stub it.
+          mkdir -p databook_newsletter/repo && touch databook_newsletter/repo/.env
+      - name: Build + boot stack (local compose override)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis api app nginx
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8581/health >/dev/null 2>&1; then echo "API up"; exit 0; fi
+            sleep 3
+          done
+          echo "::error::API did not become healthy"; docker compose logs api | tail -50; exit 1
+      - name: Smoke-check endpoints boot (build/import/config regressions)
+        run: |
+          set -e
+          code() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
+          echo "api /health:  $(code http://localhost:8581/health)"
+          echo "api /docs:    $(code http://localhost:8581/docs)"
+          echo "frontend /:   $(code http://localhost:8580/)"
+          test "$(code http://localhost:8581/health)" = "200"
+          test "$(code http://localhost:8581/docs)"   = "200"
+          # NOTE: data-dependent endpoints aren't asserted here — no seed loaded.
+          # Load a fixture (scripts/make-local-seed.sh output) to extend this.
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=80
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+
+  # ── Job 3: Read-only smoke against PRODUCTION ───────────────
+  # Prod deploys are a manual `git pull` on the box; run this (manually via
+  # the Actions tab, or after a deploy) to confirm prod is serving.
+  # Read-only GET journeys only.
+  prod-smoke:
+    name: Prod Read-only Smoke
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Playwright
+        run: |
+          npm install --no-save @playwright/test
+          npx playwright install chromium --with-deps
+      - name: Run read-only E2E against prod
+        run: BASE_URL=https://databook.nyc npx playwright test
+
+  # ── Job 4: MCP tool audit against prod (schema-drift guard) ──
+  # Calls all 40 MCP tools and fails if any throws. Must run against a
+  # populated instance (prod) — schema-drift errors don't surface on the
+  # empty CI stack. Independent of prod-smoke so flaky Playwright/CF-429 runs
+  # never mask it. See scripts/mcp-tool-audit.py.
+  mcp-tool-audit:
+    name: MCP Tool Audit (prod)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Call every MCP tool and fail on any exception
+        run: MCP_URL=https://api.databook.nyc/mcp python3 scripts/mcp-tool-audit.py

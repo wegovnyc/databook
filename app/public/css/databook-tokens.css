@@ -1,0 +1,181 @@
+/* ============================================================================
+   DATABOOK DESIGN SYSTEM — TOKENS
+   v1.0 · Unification pass · June 2026
+   ----------------------------------------------------------------------------
+   A token layer that EXTENDS the existing --db-* custom properties and works
+   WITH Bootstrap 5.3.3. Drop this <link> in layout.blade.php <head> AFTER the
+   Bootstrap CDN link. Nothing here replaces Bootstrap; it tightens it.
+
+   Source of truth = the live style.css --db-* block (navy #162E51, etc.).
+   The /styleguide Bootstrap-blue (#007bff) + Public-Sans-only values are
+   superseded by this file. Spacing + type scale follow USWDS conventions.
+   ========================================================================== */
+
+:root {
+  /* ---- BRAND / NAVY SCALE -------------------------------------------------
+     One navy ramp replaces the drifted #1a3a5c / #1f5673 / #53777a one-offs. */
+  --db-navy-900: #0b1f3a;   /* header hover, deepest */
+  --db-navy-800: #102742;   /* pressed states */
+  --db-primary:  #162e51;   /* PRIMARY — header bar, section heads (unchanged) */
+  --db-navy-600: #1f3a63;   /* submenu bar bg (was ad-hoc #1a3a5c) */
+  --db-navy-500: #2c4a73;   /* hover on navy surfaces */
+  --db-navy-100: #e7ecf3;   /* tint: selected rows, soft navy fills */
+  --db-navy-050: #f3f6fa;   /* faintest navy wash for section bands */
+
+  /* ---- LINKS / ACCENT ---------------------------------------------------- */
+  --db-link:        #005ea2;  /* link blue (unchanged) */
+  --db-link-hover:  #004080;
+  --db-link-visited:#54278f;
+  --db-accent:      #2491ff;  /* bright accent — active underline, focus ring
+                                 (replaces the drifted #4299e1) */
+  --db-accent-soft: #d3e6fb;
+
+  /* ---- BRAND WORDMARK ----------------------------------------------------
+     Civic orange for the DATABOOK.NYC wordmark. Kept separate from --db-accent
+     so functional UI (active underlines, focus rings) stays calm blue while the
+     brand reads warm. Flip the wordmark system-wide from this one value. */
+  --db-brand:       #ff941f;
+  --db-brand-hover: #ffb154;
+
+  /* ---- NEUTRAL / GRAY SCALE (USWDS-adjacent) ----------------------------- */
+  --db-white:      #ffffff;
+  --db-gray-050:   #f9fafb;   /* page tint (was #f9f9f9) */
+  --db-gray-100:   #f0f2f4;   /* secondary bg (was #f0f0f0) */
+  --db-gray-200:   #e6e9ec;
+  --db-gray-300:   #dfe1e2;   /* borders (unchanged) */
+  --db-gray-400:   #c6cacd;
+  --db-gray-500:   #9aa0a6;
+  --db-gray-600:   #757575;   /* muted text (unchanged) */
+  --db-gray-700:   #4b5159;
+  --db-gray-800:   #2d3239;
+  --db-gray-900:   #171717;   /* body text (unchanged) */
+
+  /* ---- SEMANTIC SURFACES ------------------------------------------------- */
+  --db-bg:            var(--db-white);
+  --db-bg-secondary:  var(--db-gray-100);
+  --db-bg-tertiary:   var(--db-gray-050);
+  --db-bg-band:       var(--db-navy-050);  /* section bands */
+  --db-text:          var(--db-gray-900);
+  --db-text-muted:    var(--db-gray-600);
+  --db-text-on-navy:  #eef3f9;
+  --db-text-on-navy-muted: #aebfd4;
+  --db-border:        var(--db-gray-300);
+  --db-border-strong: var(--db-gray-400);
+
+  /* ---- SEMANTIC STATE COLORS (harmonized; replace ad-hoc bootstrap pulls) -
+     Each has a foreground (-fg) for text and a soft (-bg) for fills/badges. */
+  --db-success:    #2e8540;  --db-success-bg: #ecf3ed;  --db-success-fg: #1a5128;
+  --db-danger:     #b50909;  --db-danger-bg:  #f8eded;  --db-danger-fg:  #8a0707;
+  --db-warning:    #c2850c;  --db-warning-bg: #faf3e0;  --db-warning-fg: #7a5408;
+  --db-info:       #005ea2;  --db-info-bg:    #e7f1f9;  --db-info-fg:    #00477a;
+
+  /* Soft state-tinted borders (alerts, missing-data banners) */
+  --db-success-border: #bfe0c6;
+  --db-danger-border:  #eecccc;
+  --db-warning-border: #ecd9a8;
+  --db-info-border:    #bcd8ee;
+
+  /* ---- ON-DARK (foreground + accents layered on navy/dark bands) ---------
+     A sibling brand with a non-navy (or light) header overrides these; the
+     translucent-white glass fills/borders in components.css are intentionally
+     left literal — they are brand-agnostic and read correctly on any dark hue. */
+  --db-on-dark:        #ffffff;               /* strong text / icons / borders on dark */
+  --db-on-dark-muted:  rgba(255,255,255,0.7); /* muted text on dark */
+  --db-on-dark-accent: #cfe2f7;               /* light accent tint on dark (links, root stats) */
+  --db-navy-gradient:  #1e4d8c;               /* lighter end of the navy promo gradient */
+  --db-deadline-on-dark: #ffd47a;             /* warm highlight on navy (deadlines) */
+
+  /* ---- BRAND (Analysis / orange) soft fills ------------------------------ */
+  --db-brand-bg:   #fff3e6;   /* orange pill bg, analysis menu hover */
+  --db-brand-wash: #fff8f0;   /* orange analysis banner bg */
+
+  /* ---- TYPE -------------------------------------------------------------- */
+  --db-font-sans: 'Public Sans', 'Inter', -apple-system, BlinkMacSystemFont,
+                  'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --db-font-mono: 'Roboto Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Type scale — USWDS-adjacent, rem-based (1rem = 16px) */
+  --db-text-3xs: 0.75rem;   /* 12 — table micro-labels, legal */
+  --db-text-2xs: 0.8125rem; /* 13 — dense table cells, captions */
+  --db-text-xs:  0.875rem;  /* 14 — secondary UI, metadata */
+  --db-text-sm:  0.9375rem; /* 15 — table body, controls */
+  --db-text-base:1rem;      /* 16 — body copy */
+  --db-text-md:  1.0625rem; /* 17 — lead body */
+  --db-text-lg:  1.25rem;   /* 20 — H4 / card titles */
+  --db-text-xl:  1.5rem;    /* 24 — H3 */
+  --db-text-2xl: 1.875rem;  /* 30 — H2 */
+  --db-text-3xl: 2.25rem;   /* 36 — H1 */
+  --db-text-4xl: 3rem;      /* 48 — hero / big stat */
+  --db-text-5xl: 3.75rem;   /* 60 — display stat */
+
+  --db-weight-thin: 300;
+  --db-weight-normal: 400;
+  --db-weight-medium: 500;
+  --db-weight-semibold: 600;
+  --db-weight-bold: 700;
+
+  --db-leading-tight: 1.15;
+  --db-leading-snug: 1.3;
+  --db-leading-normal: 1.5;
+  --db-leading-relaxed: 1.65;
+
+  --db-tracking-tight: -0.01em;
+  --db-tracking-wide: 0.02em;
+  --db-tracking-caps: 0.06em;  /* eyebrow / overline labels */
+
+  /* ---- SPACING (8px base, USWDS units) ----------------------------------- */
+  --db-space-05: 4px;
+  --db-space-1:  8px;
+  --db-space-15: 12px;
+  --db-space-2:  16px;
+  --db-space-25: 20px;
+  --db-space-3:  24px;
+  --db-space-4:  32px;
+  --db-space-5:  40px;
+  --db-space-6:  48px;
+  --db-space-7:  64px;
+  --db-space-8:  80px;
+
+  /* ---- RADIUS ------------------------------------------------------------ */
+  --db-radius-sm:  4px;
+  --db-radius:     8px;    /* unchanged */
+  --db-radius-lg:  12px;   /* unchanged */
+  --db-radius-pill: 999px;
+
+  /* ---- ELEVATION --------------------------------------------------------- */
+  --db-shadow-sm: 0 1px 2px rgba(11,31,58,0.06);
+  --db-shadow-md: 0 4px 10px rgba(11,31,58,0.08);
+  --db-shadow-lg: 0 12px 28px rgba(11,31,58,0.12);
+  --db-shadow-focus: 0 0 0 3px var(--db-accent-soft);
+
+  /* ---- LAYOUT ------------------------------------------------------------ */
+  --db-container-max: 1280px;
+  --db-header-h: 56px;
+  --db-submenu-h: 44px;
+
+  /* ---- MOTION ------------------------------------------------------------ */
+  --db-transition: 0.18s ease;       /* @kind other */
+  --db-transition-slow: 0.3s ease;   /* @kind other */
+
+  /* ---- Z-INDEX ----------------------------------------------------------- */
+  --db-z-header: 1030;   /* @kind other */
+  --db-z-submenu: 1020;  /* @kind other */
+  --db-z-overlay: 1080;  /* @kind other */
+
+  /* ---- Bootstrap variable bridge ----------------------------------------
+     Re-point Bootstrap's theme vars at our tokens so .btn-primary, .text-bg-*,
+     links, and focus rings inherit the navy system without per-component CSS. */
+  --bs-primary: var(--db-primary);
+  --bs-primary-rgb: 22, 46, 81;  /* @kind color */
+  --bs-link-color: var(--db-link);
+  --bs-link-color-rgb: 0, 94, 162;
+  --bs-link-hover-color: var(--db-link-hover);
+  --bs-border-color: var(--db-border);
+  --bs-body-color: var(--db-text);
+  --bs-body-font-family: var(--db-font-sans);
+  --bs-border-radius: var(--db-radius);
+  --bs-success: var(--db-success);
+  --bs-danger: var(--db-danger);
+  --bs-warning: var(--db-warning);
+  --bs-info: var(--db-info);
+}

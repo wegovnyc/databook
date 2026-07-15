@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Databook theme preview</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<link rel="stylesheet" href="/css/databook-tokens.css">
+<link rel="stylesheet" href="/css/databook-components.css">
+<!-- Sibling theme is injected below by JS when ?theme=wegov -->
+<style>
+  body { font-family: var(--db-font-sans); background: var(--db-bg); color: var(--db-text); margin: 0; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: var(--db-space-4); }
+  .bar { background: var(--db-primary); color: var(--db-on-dark); padding: 14px var(--db-space-4);
+         display: flex; align-items: center; gap: 12px; font-weight: var(--db-weight-bold); }
+  .bar .db-brand { color: var(--db-brand); }
+  .row2 { display: flex; gap: var(--db-space-2); flex-wrap: wrap; align-items: center; margin: var(--db-space-2) 0; }
+  h2 { font-size: var(--db-text-2xl); margin: var(--db-space-4) 0 var(--db-space-2); }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="db-brand" style="font-size:var(--db-text-lg)">WEGOV.NYC</span>
+    <span style="opacity:.85;font-weight:400">theme preview</span>
+    <span id="themeLabel" style="margin-left:auto;font-weight:400;opacity:.85"></span>
+  </div>
+  <div class="wrap">
+    <div class="db-eyebrow">Design system</div>
+    <h2>Component sampler</h2>
+
+    <div class="row2">
+      <a class="db-btn db-btn-primary" href="#"><i class="bi bi-arrow-right"></i> Primary</a>
+      <a class="db-btn db-btn-outline" href="#">Outline</a>
+      <a class="db-btn db-btn-ghost" href="#">Ghost</a>
+      <span class="db-badge db-badge-navy">Navy</span>
+      <span class="db-badge db-badge-success"><span class="db-dot"></span> Active</span>
+      <span class="db-badge db-badge-warning">Pending</span>
+      <a href="#">A themed link</a>
+    </div>
+
+    <div class="db-card">
+      <div class="db-card-body">
+        <div class="db-eyebrow">Procurement</div>
+        <h3 class="db-card-title">Agency snapshot</h3>
+        <div class="db-stat-grid">
+          <div class="db-stat is-accent"><div class="db-stat-value">167</div><div class="db-stat-label">Agencies</div></div>
+          <div class="db-stat"><div class="db-stat-value">$13.4B</div><div class="db-stat-label">Modified budget</div></div>
+          <div class="db-stat"><div class="db-stat-value">55,806</div><div class="db-stat-label">Contracts</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="db-alert db-alert-info" style="margin-top:var(--db-space-2)">
+      <i class="bi bi-info-circle"></i>
+      <div class="db-alert-body"><strong>Heads up.</strong> This alert inherits the shared semantic palette.</div>
+    </div>
+
+    <div class="db-analysis-banner">
+      <i class="bi bi-lightbulb"></i>
+      <div class="db-analysis-body"><strong>Analysis.</strong> The editorial accent uses the brand token.</div>
+    </div>
+  </div>
+
+<script>
+  // ?theme=wegov injects the sibling theme sheet AFTER the component CSS, so it
+  // re-brands the same components with zero markup/CSS changes.
+  var theme = new URLSearchParams(location.search).get('theme');
+  if (theme === 'wegov') {
+    var l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = '/css/themes/wegov-theme.css';
+    document.head.appendChild(l);
+    document.getElementById('themeLabel').textContent = 'WeGov theme';
+  } else {
+    document.getElementById('themeLabel').textContent = 'Databook (default tokens)';
+  }
+</script>
+</body>
+</html>

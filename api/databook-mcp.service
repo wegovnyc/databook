@@ -1,0 +1,19 @@
+[Unit]
+Description=Databook MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/databook_api
+Environment="DB_HOST=localhost"
+Environment="DB_PORT=5432"
+Environment="DB_NAME=databook"
+Environment="DB_USER=postgres"
+Environment="DB_PASSWORD=your-password-here"
+ExecStart=/home/ubuntu/.local/bin/uvicorn serve_mcp:app --host 127.0.0.1 --port 8082
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

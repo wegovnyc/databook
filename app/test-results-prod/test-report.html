@@ -1,0 +1,2136 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Databook Test Results</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+        .summary {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .stat {
+            padding: 20px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .stat-passed { background: #d4edda; color: #155724; }
+        .stat-failed { background: #f8d7da; color: #721c24; }
+        .stat-warning { background: #fff3cd; color: #856404; }
+        .stat-total { background: #d1ecf1; color: #0c5460; }
+        .stat-number {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .filters {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .filter-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 8px 16px;
+            border: 2px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .filter-btn:hover { background: #f0f0f0; }
+        .filter-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        .results {
+            display: grid;
+            gap: 15px;
+        }
+        .result-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 4px solid #ddd;
+        }
+        .result-card.passed { border-left-color: #28a745; }
+        .result-card.failed { border-left-color: #dc3545; }
+        .result-card.warning { border-left-color: #ffc107; }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+        }
+        .result-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .result-category {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #e9ecef;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #495057;
+            margin-left: 10px;
+        }
+        .result-status {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-passed { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .status-warning { background: #fff3cd; color: #856404; }
+        .result-url {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            font-family: monospace;
+        }
+        .result-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        .errors, .warnings, .api-calls {
+            margin-top: 15px;
+        }
+        .section-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .error-list, .warning-list, .api-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        .error-list li {
+            padding: 8px 12px;
+            background: #f8d7da;
+            border-left: 3px solid #dc3545;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            font-size: 13px;
+            color: #721c24;
+        }
+        .warning-list li {
+            padding: 8px 12px;
+            background: #fff3cd;
+            border-left: 3px solid #ffc107;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            font-size: 13px;
+            color: #856404;
+        }
+        .api-list li {
+            padding: 6px 10px;
+            background: #f8f9fa;
+            margin-bottom: 3px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        .api-failed { background: #f8d7da !important; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Databook Test Results</h1>
+        <p style="color: #666; margin-bottom: 30px;">
+            Generated: 3/4/2026, 10:24:12 AM | 
+            Duration: 594s
+        </p>
+
+        <div class="summary">
+            <h2 style="margin-bottom: 20px;">Summary</h2>
+            <div class="stats">
+                <div class="stat stat-total">
+                    <div class="stat-number">78</div>
+                    <div class="stat-label">Total Pages</div>
+                </div>
+                <div class="stat stat-passed">
+                    <div class="stat-number">78</div>
+                    <div class="stat-label">Passed</div>
+                </div>
+                <div class="stat stat-warning">
+                    <div class="stat-number">0</div>
+                    <div class="stat-label">Warnings</div>
+                </div>
+                <div class="stat stat-failed">
+                    <div class="stat-number">0</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="filters">
+            <h3 style="margin-bottom: 15px;">Filter Results</h3>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="passed">Passed</button>
+                <button class="filter-btn" data-filter="warning">Warnings</button>
+                <button class="filter-btn" data-filter="failed">Failed</button>
+                <button class="filter-btn" data-filter="category-Static">Static</button><button class="filter-btn" data-filter="category-About">About</button><button class="filter-btn" data-filter="category-Organizations">Organizations</button><button class="filter-btn" data-filter="category-Districts">Districts</button><button class="filter-btn" data-filter="category-Schools">Schools</button><button class="filter-btn" data-filter="category-Capital-Projects">Capital Projects</button><button class="filter-btn" data-filter="category-Capital-Archive">Capital Archive</button><button class="filter-btn" data-filter="category-Titles">Titles</button><button class="filter-btn" data-filter="category-Notices">Notices</button><button class="filter-btn" data-filter="category-Auctions">Auctions</button><button class="filter-btn" data-filter="category-People">People</button><button class="filter-btn" data-filter="category-Procurement">Procurement</button>
+            </div>
+        </div>
+
+        <div class="results">
+            
+                <div class="result-card passed" data-status="passed" data-category="Static">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Homepage</span>
+                            <span class="result-category">Static</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3795ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Static">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">About Page</span>
+                            <span class="result-category">Static</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/about</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1059ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="About">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Data Health</span>
+                            <span class="result-category">About</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/about/data</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4691ms</span>
+                        <span>API Calls: 60</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                        <div class="api-calls">
+                            <div class="section-title">🔌 API Calls (60)</div>
+                            <ul class="api-list">
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/8u85-k342.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/b37a-3faw.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/2cmn-uidm.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/nrik-v7ws.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/u42g-qjaj.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/djxg-kcfi.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/mwzb-yiwb.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/x5tk-fa54.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/uvw5-9znb.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/fi59-268w.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/kpav-sd4t.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/dg92-zbpx.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/dcjb-es8v.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/vn4m-mk4t.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/ji82-xba5.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/4d7f-74pe.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/vx8i-nprf.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/2t2c-qih9.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/84ax-hg3y.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/ye3c-m4ga.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/423i-ukqr.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/nzjr-3966.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/k397-673e.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/mdcw-n682.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/f4wx-5ve6.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/gyhf-rsr3.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/qj5n-h5qp.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/95tx-snak.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/fb86-vt7u.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/did2-qzw3.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/c7ru-d68s.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/8fj8-3sgg.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/b9km-gdpy.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/vmdx-uykr.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/ruf7-3wgc.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/7xjx-2mhj.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/2xh6-psuq.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/bjmk-35w5.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/gkd7-3vk7.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/esmb-8zkm.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/xzy8-qqgf.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/jvk9-k4re.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/3wtp-43m9.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/97nd-ff3i.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/f34v-uffx.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/gsj6-6rwm.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/4qmi-txnk.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/9azj-tmjp.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/xip9-pe9k.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/duz4-2gn9.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/qj2z-ibhs.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/5tqd-u88y.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/8586-3zfm.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/5ery-qagt.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/kvhd-5fmu.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/wg9x-4ke6.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/gqq2-hgxd.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/nrik-v7ws.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/djxg-kcfi.json
+                                    </li>
+                                
+                                    <li class="">
+                                        ✅ 200 - https://data.cityofnewyork.us/api/views/fi59-268w.json
+                                    </li>
+                                
+                            </ul>
+                        </div>
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="About">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Database Tables</span>
+                            <span class="result-category">About</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/about/tables</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3147ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="About">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Ingestion Log</span>
+                            <span class="result-category">About</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/about/log</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2222ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="About">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">MCP Info</span>
+                            <span class="result-category">About</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/mcp</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 892ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="About">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Styleguide</span>
+                            <span class="result-category">About</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/styleguide</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1159ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="About">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Blog</span>
+                            <span class="result-category">About</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/blog</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1016ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organizations Directory</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/organizations/directory</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1784ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organizations All</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/organizations/all</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1381ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organizations Chart</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/organizations/chart</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1167ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Profile</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2533ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Projects</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/projects</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1911ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Budget</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/expense-budget</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2195ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Notices</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/notices</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2382ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Events</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/events</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3733ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Jobs</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/jobs</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3337ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Civil List</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/civil-list</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1811ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Demographics</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/demographics</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2379ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Council Discretionary</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/city-council-discretionary</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1730ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Contracts</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/procurement-contracts</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 6695ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Vendors</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/procurement-vendors</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 6132ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Solicitations</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/procurement-solicitations</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 6957ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Facilities</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/facilities</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2584ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Organization Performance</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/o/170010068-administration-for-childrens-services/agency-performance</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1498ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Organizations">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">City Agencies Directory</span>
+                            <span class="result-category">Organizations</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/organizations/agencies</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2017ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Districts Main</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/districts</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1119ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Community Districts</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/districts/cd</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 851ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">City Council Districts</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/districts/cc</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 883ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Neighborhood Tabulation Areas</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/districts/nta</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 916ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">School Districts</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/districts/sd</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1812ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">District Profile</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/d/cd-1-manhattan-1</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 5276ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">District Projects</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/d/cd-1-manhattan-1/projects</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3694ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Districts">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">District Facilities</span>
+                            <span class="result-category">Districts</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/d/cd-1-manhattan-1/facilities</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3607ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Schools">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Schools Directory</span>
+                            <span class="result-category">Schools</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/schools</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2817ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Schools">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">School Profile</span>
+                            <span class="result-category">Schools</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/s/K001-ps-001-the-bergen</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 8865ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Schools">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">School Enrollment</span>
+                            <span class="result-category">Schools</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/s/K001-ps-001-the-bergen/enrollment</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2539ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Schools">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">School Demographics</span>
+                            <span class="result-category">Schools</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/s/K001-ps-001-the-bergen/race-ethnicity-gender</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3261ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Capital Projects Home</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3248ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">All Projects</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/projects</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1694ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Project Types</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/projects/types</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 5425ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Project Categories</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/projects/categories</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3961ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Budget Lines</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/projects/budget-lines</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4191ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Commitments</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/projects/commitments</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 7794ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Minor Projects</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital/minor-projects</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1648ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Project Detail</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/p/HWK876_reconstruction-of-wyckoff-avenue-brooklyn</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4304ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Projects">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Minor Project Detail</span>
+                            <span class="result-category">Capital Projects</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital/minor-projects/850MIBBNC04B</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2559ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Archive">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Capital Archive Home</span>
+                            <span class="result-category">Capital Archive</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital-archive</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3858ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Archive">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Archive Projects</span>
+                            <span class="result-category">Capital Archive</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital-archive/projects</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4030ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Archive">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Archive Project Types</span>
+                            <span class="result-category">Capital Archive</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital-archive/project-types</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 6986ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Archive">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Archive Categories</span>
+                            <span class="result-category">Capital Archive</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital-archive/categories</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4511ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Capital-Archive">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Archive Budget Lines</span>
+                            <span class="result-category">Capital Archive</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/capital-archive/budget-lines</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4559ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Titles">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Titles Directory</span>
+                            <span class="result-category">Titles</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/titles</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1804ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Titles">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Title Profile</span>
+                            <span class="result-category">Titles</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/t/00031-hcppa</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2305ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Titles">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Title Positions</span>
+                            <span class="result-category">Titles</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/t/00031-hcppa/positions</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1315ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Notices Main</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 4680ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Public Hearings</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/public-hearings</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1116ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Meetings</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/meetings</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2290ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Notices</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/procurement</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1857ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Notices All</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/all</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2815ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Notices Events</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/events</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1308ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Contract Awards</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/contract-awards</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2353ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Special Materials</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/special-materials</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1704ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Agency Rules</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/agency-rules</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2513ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Property Disposition</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/property-disposition</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 2474ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Court Notices</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/court-notices</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1857ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Notices">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Change of Personnel</span>
+                            <span class="result-category">Notices</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/notices/change-of-personnel</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1930ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Auctions">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Auctions</span>
+                            <span class="result-category">Auctions</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/auctions</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 830ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="People">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">People Directory</span>
+                            <span class="result-category">People</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/people</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 857ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="People">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">People Search All</span>
+                            <span class="result-category">People</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/people/search/smith/all</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1412ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="People">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">People Search Current</span>
+                            <span class="result-category">People</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/people/search/smith/current</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 1210ms</span>
+                        <span>API Calls: 0</span>
+                        <span>✅ Has Data</span>
+                        <span>✅ DataTable OK</span>
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Dashboard</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/procurement</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 11695ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Solicitations</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/procurement/solicitations</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 8709ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Contracts</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/procurement/contracts</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 7981ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Vendors</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/procurement/vendors</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 3432ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Transactions</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/procurement/transactions</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 16449ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Agencies</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/procurement/agencies</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 7831ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+                <div class="result-card passed" data-status="passed" data-category="Procurement">
+                    <div class="result-header">
+                        <div>
+                            <span class="result-title">Procurement Research</span>
+                            <span class="result-category">Procurement</span>
+                        </div>
+                        <span class="result-status status-passed">passed</span>
+                    </div>
+                    <div class="result-url">https://databook.nyc/research/digital-reform</div>
+                    <div class="result-meta">
+                        <span>HTTP: 200</span>
+                        <span>Load Time: 12122ms</span>
+                        <span>API Calls: 0</span>
+                        <span>⚠️ No Data</span>
+                        
+                    </div>
+                    
+                    
+                    
+                </div>
+            
+        </div>
+    </div>
+
+    <script>
+        // Filter functionality
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                // Update active button
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                const filter = btn.dataset.filter;
+                const cards = document.querySelectorAll('.result-card');
+
+                cards.forEach(card => {
+                    if (filter === 'all') {
+                        card.classList.remove('hidden');
+                    } else if (filter.startsWith('category-')) {
+                        const category = filter.replace('category-', '');
+                        card.classList.toggle('hidden', card.dataset.category !== category);
+                    } else {
+                        card.classList.toggle('hidden', card.dataset.status !== filter);
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
+    

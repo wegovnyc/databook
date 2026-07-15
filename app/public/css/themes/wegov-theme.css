@@ -1,0 +1,49 @@
+/* ============================================================================
+   WeGovNYC THEME — proof-of-concept sibling brand
+   ----------------------------------------------------------------------------
+   Demonstrates "compatible but not the same": this sheet overrides ONLY the
+   brand token slots (palette, accent, wordmark, on-dark tints) and inherits
+   every structural token (spacing, radius, type ramp, z-index, elevation) from
+   databook-tokens.css. Load order:  bootstrap -> databook-tokens.css ->
+   databook-components.css -> wegov-theme.css. No component CSS is touched.
+
+   Identity: teal/green civic ramp + terracotta wordmark — clearly a sibling of
+   Databook, not a copy.
+   ========================================================================== */
+
+:root {
+  /* Brand ramp (replaces the navy ramp, same slots) */
+  --db-navy-900: #08312e;
+  --db-navy-800: #0b3b37;
+  --db-primary:  #0f4f48;   /* header bar, section heads */
+  --db-navy-600: #166a60;   /* submenu bar */
+  --db-navy-500: #1f8377;   /* hover on brand surfaces */
+  --db-navy-100: #e2f1ee;   /* soft brand tint (selected rows) */
+  --db-navy-050: #f1f8f6;   /* faint brand wash (bands) */
+
+  /* Links / accent */
+  --db-link:        #0a6b5e;
+  --db-link-hover:  #064c42;
+  --db-accent:      #12b3a6;
+  --db-accent-soft: #c7efe9;
+
+  /* Wordmark — terracotta, distinct from Databook's civic orange */
+  --db-brand:       #e0663a;
+  --db-brand-hover: #ef8b64;
+  --db-brand-bg:    #fbe9e1;   /* soft terracotta fill */
+  --db-brand-wash:  #fdf3ee;
+
+  /* On-dark tints derived from the new brand */
+  --db-on-dark-accent:   #bfe9e2;
+  --db-navy-gradient:    #1f8377;
+  --db-deadline-on-dark: #ffd47a;  /* warm highlight reads on teal too */
+
+  /* Keep semantic state colors + all structural tokens (spacing, radius, type,
+     z-index, elevation) inherited — that shared skeleton is what makes the
+     brands "compatible". Re-point the Bootstrap bridge at the new primary. */
+  --bs-primary: var(--db-primary);
+  --bs-primary-rgb: 15, 79, 72;
+  --bs-link-color: var(--db-link);
+  --bs-link-color-rgb: 10, 107, 94;
+  --bs-link-hover-color: var(--db-link-hover);
+}

@@ -1,0 +1,207 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: databook-laravel
+    container_name: databook-app
+    restart: unless-stopped
+    working_dir: /var/www
+
+    networks:
+      - databook-network
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      DB_HOST: mysql
+      REDIS_HOST: redis
+      FAPI_ENTRY: http://api:8000
+    volumes:
+      - shared_data:/var/shared
+      - ./app/.env:/var/www/.env
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: databook-api
+    container_name: databook-api
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-databook}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      # Route via nginx reverse proxy (normalizer.conf) — API container
+      # cannot reach Cloudflare-proxied normalize.databook.nyc directly.
+      NORMALIZER_BASE_URL: ${NORMALIZER_BASE_URL:-http://databook-nginx/normalizer}
+      DATA_SCHEDULER_ENABLED: "1"
+      # Spending/budget/revenue data lake. Default = AWS S3 (public-read, over
+      # HTTPS). Set these (+ DATA_LAKE_PATH below) in the env/.env to serve the
+      # Parquet off the mounted local /data volume instead — no AWS creds needed.
+      SPENDING_DATA_BASE: ${SPENDING_DATA_BASE:-https://nyc-databook-spending.s3.amazonaws.com}
+      BUDGET_REVENUE_BASE: ${BUDGET_REVENUE_BASE:-https://nyc-databook-spending.s3.amazonaws.com}
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          # 1 GiB was too tight for the DuckDB-over-Parquet spending/budget/revenue
+          # workload — a single heavy scan (or a burst of them) spiked past 1 GiB and
+          # the container was OOM-killed and restarted. Headroom on the host is ample
+          # (~11 GiB free). Defense-in-depth alongside the bounded digital-reform cache.
+          memory: 3072M
+          cpus: '1.0'
+    volumes:
+      - tmp-data:/var/tmp
+      - shared_data:/app/shared
+      - ./api/env.yaml:/app/env.yaml
+      - ./titles_analysis.csv:/app/titles_analysis.csv
+      # Local data lake (spending/budget/revenue Parquet). Empty by default; on
+      # prod DATA_LAKE_PATH points at the populated host dir. Only read when
+      # SPENDING_DATA_BASE/BUDGET_REVENUE_BASE point at /data.
+      - ${DATA_LAKE_PATH:-./data-lake}:/data
+    networks:
+      - databook-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    dns:
+      - 127.0.0.11
+      - 8.8.8.8
+      - 1.1.1.1
+
+  mcp:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.mcp
+    image: databook-mcp
+    container_name: databook-mcp
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-databook}
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8082/admin/logs" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    networks:
+      - databook-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Newsletter service moved to AWS App Runner (Feb 2026)
+  # URL: https://sgkenm8rum.us-east-1.awsapprunner.com
+  newsletter:
+    build:
+      context: ./databook_newsletter/repo
+      dockerfile: Dockerfile
+    image: databook-newsletter
+    container_name: databook-newsletter
+    restart: unless-stopped
+    env_file:
+      - ./databook_newsletter/repo/.env
+    environment:
+      MCP_ENDPOINT: http://mcp:8082/mcp
+      BASE_PATH: /newsletter
+      TZ: America/New_York
+    volumes:
+      - ./databook_newsletter/repo/output:/app/output
+    depends_on:
+      mcp:
+        condition: service_healthy
+    networks:
+      - databook-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: databook-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./app:/var/www
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - /etc/letsencrypt:/etc/letsencrypt
+    networks:
+      - databook-network
+    depends_on:
+      - app
+      - api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  mysql:
+    image: mysql:8.0
+    container_name: databook-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-laravel}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_USER: ${DB_USERNAME:-laravel}
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - databook-network
+
+  postgres:
+    image: postgres:10-alpine
+    container_name: databook-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-databook}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - tmp-data:/var/tmp
+    networks:
+      - databook-network
+
+  redis:
+    image: redis:alpine
+    container_name: databook-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - databook-network
+
+networks:
+  databook-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  postgres-data:
+  redis-data:
+  tmp-data:
+  shared_data:

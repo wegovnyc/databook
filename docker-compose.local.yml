@@ -1,0 +1,48 @@
+# Local development overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Why: The base docker-compose.yml is production-oriented (staging server).
+# This override adjusts ports to avoid conflicts with local services and
+# removes SSL/cert dependencies that don't exist locally.
+
+services:
+  nginx:
+    ports:
+      - "8580:80" # Local HTTP (avoids port 80 conflicts)
+    volumes:
+      - ./app:/var/www
+      - ./nginx/conf.d.local:/etc/nginx/conf.d:ro
+      # No /etc/letsencrypt — SSL not available locally
+
+  app:
+    environment:
+      # Local frontend talks to the LOCAL api (staging retired). Two entries:
+      #  - FAPI_ENTRY: server-side proxy (PHP) → reach the api over the docker network
+      #  - FAPI_PUBLIC_ENTRY: browser-side fetches → host-published api port
+      FAPI_ENTRY: http://api:8000
+      FAPI_PUBLIC_ENTRY: http://localhost:8581
+    volumes:
+      - ./app/resources/views:/var/www/resources/views # Live view editing
+      - ./app/public:/var/www/public # Live CSS/JS editing
+
+  postgres:
+    ports:
+      - "15432:5432" # Local PG access (avoids host port 5432 conflict)
+
+  mysql:
+    ports:
+      - "13306:3306" # Local MySQL access (avoids host port 3306 conflict)
+
+  redis:
+    ports:
+      - "16379:6379" # Local Redis access
+
+  api:
+    ports:
+      - "8581:8000" # Direct API access for debugging
+    environment:
+      NORMALIZER_BASE_URL: https://normalize.databook.nyc
+
+  mcp:
+    ports:
+      - "8582:8082" # Direct MCP access for debugging

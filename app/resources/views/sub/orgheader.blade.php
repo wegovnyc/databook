@@ -1,0 +1,127 @@
+{{-- Unified profile header + tab nav (db-* design system).
+     Data hooks preserved: logo→orgProfile link, type-label (orgs?type=), tags (orgs?tag=),
+     district "Representing" links, parent "Reports to" + orgsChartFocus diagram link,
+     social icon loop with copyLinkM()/popover hooks + #details-permalink/#orgRSSNews textareas,
+     and the $menu/$slist section nav (orgProfile/orgSection routes, $active/$activeDropDown). --}}
+<div class="db-profile-header" id="org-header">
+	<div class="inner_container">
+		<div class="container">
+			<div class="db-profile-header-top">
+				@if ($org['logo_file'] ?? null)
+					<div class="db-profile-logo">
+						<a href="{{ route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]) }}">
+							<img class="org-logo" src="/img/logo/{{ $org['logo_file'] }}" alt="{{ $org['name'] }}" />
+						</a>
+					</div>
+				@endif
+
+				<div class="db-profile-main org_detailheader">
+					<div class="db-profile-kicker">
+						@if ($org['type'] ?? null)
+							<a href="{{ route('orgs') }}?type={{ urlencode($org['type']) }}" class="no-underline">
+								<span class="db-type-label">{{ $org['type'] }}</span>
+							</a>
+						@endif
+						@if ($org['tags'] ?? null)
+							@foreach (json_decode($org['tags'], true) as $tag)
+								<a href="{{ route('orgs') }}?tag={{ urlencode($tag) }}" class="no-underline">
+									<span class="db-tag">{{ $tag }}</span>
+								</a>
+							@endforeach
+						@endif
+					</div>
+
+					<h1 class="db-profile-title">{{ $org['name'] }}</h1>
+
+					@if (($org['communityDistrictName'] ?? null) || ($org['cityCouncilDistrictName'] ?? null) || ($org['parent_id'] ?? null))
+						<div class="db-profile-meta">
+							@if ($org['communityDistrictName'] ?? null)
+								<span class="db-meta-item"><i class="bi bi-geo-alt"></i> Representing
+									<a href="{{ route('districtsPreset', [
+											'type' => 'cd',
+											'id' => preg_replace('~(\["|"\])~', '', $org['communityDistrictId']),
+											'dslug' => Str::slug($org['communityDistrictName'], '-'),
+											'section' => 'city-council-discretionary',
+										]) }}">{{ trim(preg_replace('~(\["|"\])~', '', $org['communityDistrictName'])) }}</a>
+								</span>
+							@endif
+							@if ($org['cityCouncilDistrictName'] ?? null)
+								<span class="db-meta-item"><i class="bi bi-geo-alt"></i> Representing
+									<a href="{{ route('districtsPreset', [
+											'type' => 'cc',
+											'id' => preg_replace('~(\["|"\])~', '', $org['cityCouncilDistrictId']),
+											'dslug' => Str::slug($org['cityCouncilDistrictName'], '-'),
+											'section' => 'city-council-discretionary',
+										]) }}">{{ trim($org['cityCouncilDistrictName']) }}</a>
+								</span>
+							@endif
+							@if ($org['parent_id'] ?? null)
+								<span class="db-meta-item"><i class="bi bi-diagram-3"></i> Reports to
+									@if (preg_match('~Classification|Official~si', $org['parent_type'] ?? ''))
+										<span>{{ trim($org['parent_name'] ?? '') }}</span>
+									@else
+										<a href="{{ route('orgProfile', ['id' => $org['parent_id'], 'orgslug' => $org['parent_id']]) }}">{{ trim($org['parent_name'] ?? '') }}</a>
+									@endif
+									<a href="{{ route('orgsChartFocus', ['id' => $org['id']]) }}" class="db-icon-btn" title="View org chart" style="width:28px;height:28px;">
+										<i class="bi-diagram-3-fill"></i>
+									</a>
+								</span>
+							@endif
+						</div>
+					@endif
+				</div>
+
+				<div class="db-profile-actions icon_orgsocial">
+					@foreach ($icons as $f=>$pp)
+						@if ($f == 'ical')
+							<a class="db-icon-btn" onclick="copyLinkM(this);" title="Copy Notices iCal feed link">
+								<i class="bi-{{ $pp[0] }} share_icon_container" data-bs-toggle="popover" data-content="Agency Notices iCal feed link copied to clipboard" placement="left" trigger="manual" style="cursor: pointer;"></i>
+							</a>
+							<textarea id="details-permalink" class="details">{!! route('orgIcalEvents', ['id' => $id]) !!}</textarea>
+						@elseif ($f == 'rss')
+							<a class="db-icon-btn" onclick="copyLinkM(this, 'orgRSSNews');" title="Copy News RSS feed link">
+								<i class="bi-{{ $pp[0] }} share_icon_container" data-bs-toggle="popover" data-content="News RSS feed link copied to clipboard" placement="left" trigger="manual" style="cursor: pointer;"></i>
+							</a>
+							<textarea id="orgRSSNews" class="details">{!! route('orgRSSNews', ['id' => $id]) !!}</textarea>
+						@elseif ($org[$f] ?? null)
+							<a class="db-icon-btn" href="{{ $pp[1] }}{{ $org[$f] }}" target="_blank" rel="nofollow">
+								<i class="bi-{{ $pp[0] }}"></i>
+							</a>
+						@endif
+					@endforeach
+				</div>
+			</div>
+
+			@if ($menu ?? null)
+				<div class="db-tabs-wrap org_headermenu">
+					<nav class="db-tabs submenu_org" aria-label="Organization sections">
+						@foreach ($menu as $h=>$sect)
+							@if (is_string($sect))
+								@if ($sect == 'about')
+									<a class="db-tab @if ($active == $sect) is-active @endif" href="{{ route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]) }}">{{ $slist[$sect] }}</a>
+								@else
+									<a class="db-tab @if ($active == $sect) is-active @endif" href="{{ route('orgSection', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-'), 'section' => $sect]) }}">{{ $slist[$sect] }}</a>
+								@endif
+							@else
+								<div class="db-tab-dd">
+									<button type="button" class="db-tab @if ($activeDropDown == $h) is-active @endif" data-dd aria-haspopup="true" aria-expanded="false" aria-controls="orgdd-{{ $loop->index }}">
+										{{ $h }} <i class="bi bi-chevron-down db-caret"></i>
+									</button>
+									<div class="db-tab-menu" id="orgdd-{{ $loop->index }}" role="menu">
+										@foreach ($sect as $subsect)
+											@if ($subsect == 'about')
+												<a role="menuitem" class="@if ($active == $subsect) is-active @endif" href="{{ route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]) }}">{{ $slist[$subsect] }}</a>
+											@else
+												<a role="menuitem" class="@if ($active == $subsect) is-active @endif" href="{{ route('orgSection', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-'), 'section' => $subsect]) }}">{{ $slist[$subsect] }}</a>
+											@endif
+										@endforeach
+									</div>
+								</div>
+							@endif
+						@endforeach
+					</nav>
+				</div>
+			@endif
+		</div>
+	</div>
+</div>
