@@ -396,7 +396,7 @@ For a list of all datasets that were included on all the NYC Open Data plans (20
 			'flds' => [
 				'"Fiscal Year"', '"Source"', '"Council Member"',
 				'function (r) { return `<a href="https://projects.propublica.org/nonprofits/organizations/${r["EIN"]}" target="_blank" rel="nofollow">${r["Legal Name of Organization"]}</a>` }',
-				'"Status"', '"Amount ($)"', '"Borough"', '"Council District"', '"wegov-nta-code"'
+				'"Status"', '"Amount ($)"', '"Borough"', '"Council District"', '"NTA"'
 			],
 			'filters' => [0 => null, 1 => null, 2 => null, 6 => null, 7 => null],
 			'details' => [
@@ -420,7 +420,12 @@ For a list of all datasets that were included on all the NYC Open Data plans (20
 				'NTA' => 'NTA',
 			],
 			'description' => 'The dataset reflects applications for discretionary funding to be allocated by the New York City Council.',
-			'map' => ['cc' => 8, 'nta' => 9],
+			// NTA omitted from the map: this dataset's NTA column is 2010-vintage names
+			// (mostly empty here) — incompatible with the 2020 NTAs the map uses (see the
+			// district version, which omits it for the same reason). The hidden column 9
+			// now reads the real "NTA" field (was "wegov-nta-code", which doesn't exist on
+			// this table → DataTables "Requested unknown parameter" error on populated rows).
+			'map' => ['cc' => 8],
 			'script' => "datatable.order([1, 'desc']).draw();",
 			#'script' => "$('#filter-1').val($('#filter-1 option:last-child').val()).change();",
 		],

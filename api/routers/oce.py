@@ -12,7 +12,9 @@ import csv
 import io
 import logging
 from collections import OrderedDict
+from datetime import datetime, timezone
 from modules.postgrex.asyncmodel import PostgresModelAsync
+from modules.duckpool import to_duckdb_thread
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +103,7 @@ CONTRACT_SPEND_CACHE_TTL = 86400  # 24 hours
 # Persistent DuckDB connection for spending/transactions queries. Reused across
 # requests so DuckDB's HTTP metadata + object cache stay warm — re-reading the
 # S3 Parquet footers on every request is the dominant cost. Per-query work uses
-# .cursor() so it's safe under asyncio.to_thread.
+# .cursor() so it's safe under to_duckdb_thread.
 _spending_con = None
 
 def _persistent_spending_connection():
@@ -151,7 +153,7 @@ async def prewarm_transactions_metadata():
 
     try:
         logger.info("[cache] Pre-warming transactions metadata + dashboard...")
-        await asyncio.to_thread(_warm_meta)
+        await to_duckdb_thread(_warm_meta)
         # Warm the dashboard's actual endpoint response caches for the default FY,
         # in the same order the page loads them. Each is guarded so one slow/failed
         # scan can't abort the rest.
@@ -259,7 +261,7 @@ def _get_checkbook_summary() -> dict:
     """Query Parquet spending for total and yearly breakdown across all FYs.
     
     Returns dict with 'total', 'transactions', and 'by_year' keys.
-    Runs synchronously — call via asyncio.to_thread.
+    Runs synchronously — call via to_duckdb_thread.
     """
     con = get_spending_connection()
     # 5 most recent years for the dashboard summary (the get_spending_files default).
@@ -372,7 +374,7 @@ async def get_dashboard_stats():
     
     # Total Spending (from Checkbook S3 Parquet - actual payments)
     try:
-        checkbook = await asyncio.to_thread(_get_checkbook_summary)
+        checkbook = await to_duckdb_thread(_get_checkbook_summary)
         stats['spending'] = checkbook['total']
         stats['transactions'] = checkbook['transactions']
     except Exception:
@@ -567,6 +569,486 @@ async def _notices_for_epins(epins: list) -> list:
         return []
 
 
+# --- SBS certified-business enrichment ---------------------------------------
+# `sbscertifiedbiz` is the Dept of Small Business Services directory of certified
+# M/WBE / EBE / LBE firms. It carries what PASSPort does NOT: what the firm
+# actually DOES (NAICS sector + free-text description), website/phone, year
+# established, bonding capacity, union-signatory status, and up to three
+# self-reported past-performance jobs. ~11.5k rows, of which ~6.3k (54%) match a
+# PASSPort vendor by normalized name.
+#
+# Matched LIVE on a normalized name rather than through a stored crosswalk: there
+# is no shared identifier between SBS and PASSPort, and the table is small enough
+# that the scan is trivial next to the request's other work. Also tries the DBA
+# name, since firms are certified under a formal name but contract under a trade
+# name. Guarded — a missing table or bad row must never break the vendor profile.
+_SBS_JOB_FIELDS = (
+    # (client, value, date, description) — note job 1's value column is named
+    # inconsistently in the source dataset (`Largest_Value_of_Contract`).
+    ("Name_of_Client_Job_Exp_1", "Largest_Value_of_Contract",
+     "Date_of_Work_Job_Exp_1", "Description_of_Work_Job_Exp_1"),
+    ("Name_of_Client_Job_Exp_2", "Value_of_Contract_Job_Exp_2",
+     "Date_of_Work_Job_Exp_2", "Description_of_Work_Job_Exp_2"),
+    ("Name_of_Client_Job_Exp_3", "Value_of_Contract_Job_Exp_3",
+     "Date_of_Work_Job_Exp_3", "Description_of_Work_Job_Exp_3"),
+)
+
+_SBS_SQL = """
+    SELECT "Account_Number", "Vendor_Formal_Name", "Vendor_DBA", "Business_Description",
+           "Certification", "Certification_Renewal_Date", "Website", "telephone",
+           "Date_Of_Establishment", "Aggregate_Bonding_Limit",
+           "Signatory_To_Union_Contracts", "NAICS_Title", "NAICS_Sector",
+           "NAICS_Subsector", "ID6_digit_NAICS_code",
+           "Types_of_Construction_Projects_Performed", "Capacity_Building_Programs",
+           "Enrolled_in_PASSPort", "Borough", "City", "State",
+           "Name_of_Client_Job_Exp_1", "Largest_Value_of_Contract",
+           "Date_of_Work_Job_Exp_1", "Description_of_Work_Job_Exp_1",
+           "Name_of_Client_Job_Exp_2", "Value_of_Contract_Job_Exp_2",
+           "Date_of_Work_Job_Exp_2", "Description_of_Work_Job_Exp_2",
+           "Name_of_Client_Job_Exp_3", "Value_of_Contract_Job_Exp_3",
+           "Date_of_Work_Job_Exp_3", "Description_of_Work_Job_Exp_3"
+    FROM sbscertifiedbiz
+    WHERE upper(regexp_replace("Vendor_Formal_Name", '[^A-Za-z0-9]', '', 'g')) = $1
+       OR upper(regexp_replace("Vendor_DBA", '[^A-Za-z0-9]', '', 'g')) = $1
+    LIMIT 1
+"""
+
+
+def _s(row: dict, key: str) -> str:
+    """Trimmed string cell ('' when absent/blank) — the SBS table is all text."""
+    return (row.get(key) or "").strip()
+
+
+async def _sbs_profile(vendor_name: str) -> Optional[dict]:
+    """SBS certified-business record for a vendor name, or None."""
+    key = re.sub(r"[^A-Za-z0-9]", "", (vendor_name or "").upper())
+    if not key:
+        return None
+    try:
+        rows = await PostgresModelAsync.select_safe(_SBS_SQL, [key])
+    except Exception as exc:  # noqa: BLE001 — best-effort enrichment
+        logger.warning(f"[oce] SBS lookup failed for {vendor_name!r}: {exc}")
+        return None
+    if not rows:
+        return None
+    r = rows[0]
+    jobs = []
+    for client_f, value_f, date_f, desc_f in _SBS_JOB_FIELDS:
+        client = _s(r, client_f)
+        if not client:
+            continue
+        jobs.append({"client": client, "value": _s(r, value_f),
+                     "date": _s(r, date_f), "description": _s(r, desc_f)})
+    return {
+        "account_number": _s(r, "Account_Number"),
+        "formal_name": _s(r, "Vendor_Formal_Name"),
+        "dba": _s(r, "Vendor_DBA"),
+        "description": _s(r, "Business_Description"),
+        "certification": _s(r, "Certification"),
+        "certification_renewal": _s(r, "Certification_Renewal_Date")[:10],
+        "website": _s(r, "Website"),
+        "telephone": _s(r, "telephone"),
+        "established": _s(r, "Date_Of_Establishment")[:10],
+        "bonding_limit": _s(r, "Aggregate_Bonding_Limit"),
+        "union_signatory": _s(r, "Signatory_To_Union_Contracts"),
+        "naics_title": _s(r, "NAICS_Title"),
+        "naics_sector": _s(r, "NAICS_Sector"),
+        "naics_subsector": _s(r, "NAICS_Subsector"),
+        "naics_code": _s(r, "ID6_digit_NAICS_code"),
+        "construction_types": _s(r, "Types_of_Construction_Projects_Performed"),
+        "capacity_programs": _s(r, "Capacity_Building_Programs"),
+        "enrolled_in_passport": _s(r, "Enrolled_in_PASSPort"),
+        "borough": _s(r, "Borough"),
+        "city": _s(r, "City"),
+        "state": _s(r, "State"),
+        "jobs": jobs,
+    }
+
+
+# --- PASSPort vendor sub-tables ----------------------------------------------
+# MOCS publishes five companion exports to the vendor list that PASSPort itself
+# displays and Databook never has: who runs the company (vendor_principals),
+# agency performance ratings (vendor_evaluations), the registered entity record
+# incl. the only populated DUNS we have (vendor_entity_summary), the corporate
+# family (vendor_related_entities) and DBA history (vendor_other_names).
+# Loaded by api/enrich_vendor.py on the daily `vendors` ingest.
+#
+# All five key on `vendor_name_norm`, the [A-Z0-9] skeleton of the vendor name
+# — the same key shape _sbs_profile uses. They come from the same MOCS system
+# as `vendors`, so this is effectively a foreign key: 99.4-99.6% of principals /
+# other-names / related-entity rows match, and 94% of vendors get a principals
+# and entity-summary panel. Joined live; no crosswalk table, no human review.
+#
+# Caps: a single vendor can carry 1,141 evaluations and 384 related entities, so
+# those two are rolled up with a bounded detail list rather than returned whole.
+_EVAL_DETAIL_LIMIT = 25
+_RELATED_LIMIT = 50
+_OTHER_NAMES_LIMIT = 25
+
+# Rating vocabulary, best to worst. Used to order the summary consistently and
+# to decide what counts as adverse — the source has exactly these five values.
+_RATING_ORDER = ["Excellent", "Good", "Satisfactory", "Poor", "Unsatisfactory"]
+_ADVERSE_RATINGS = {"Poor", "Unsatisfactory"}
+
+
+async def _passport_profile(vendor_name: str) -> Optional[dict]:
+    """The five PASSPort sub-table panels for a vendor name, or None.
+
+    Every query is individually guarded: on a fresh environment none of these
+    tables exist yet, and a vendor profile must render fine without them.
+    """
+    key = re.sub(r"[^A-Za-z0-9]", "", (vendor_name or "").upper())
+    if not key:
+        return None
+
+    # One catalog probe before the eight lookups. "Not loaded yet" is a normal
+    # state — a fresh environment, or prod between a deploy and the first
+    # enrich_vendor run — and it should cost one cheap query and log nothing,
+    # not eight failed lookups and eight warnings on every vendor page view.
+    try:
+        probe = await PostgresModelAsync.select_safe(
+            "SELECT to_regclass('public.vendor_principals') IS NOT NULL "
+            "OR to_regclass('public.vendor_entity_summary') IS NOT NULL "
+            "AS installed")
+        if not (probe and probe[0].get("installed")):
+            return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[oce] PASSPort sub-table probe failed: {exc}")
+        return None
+
+    async def q(sql: str, params: list) -> list:
+        try:
+            return await PostgresModelAsync.select_safe(sql, params) or []
+        except Exception as exc:  # noqa: BLE001 — best-effort enrichment
+            logger.warning(f"[oce] PASSPort sub-table query failed for "
+                           f"{vendor_name!r}: {exc}")
+            return []
+
+    # ⚠ 80 vendors have two entity_summary rows (duplicate MOCS registrations).
+    # Prefer the more complete one rather than an arbitrary LIMIT 1.
+    entity_rows = await q(
+        """SELECT address1, address2, city, state, zip, country, telephone,
+                  symbol, for_profit, duns, revenue
+           FROM vendor_entity_summary WHERE vendor_name_norm = $1
+           ORDER BY (duns IS NOT NULL) DESC, (telephone IS NOT NULL) DESC,
+                    (address1 IS NOT NULL) DESC
+           LIMIT 1""", [key])
+
+    principals = await q(
+        """SELECT principal_name, title, ownership_type
+           FROM vendor_principals WHERE vendor_name_norm = $1
+             AND principal_name IS NOT NULL
+           ORDER BY (ownership_type = 'Principal Owner') DESC,
+                    principal_name""", [key])
+
+    eval_summary = await q(
+        """SELECT rating, count(*) AS n,
+                  count(DISTINCT agency) AS agencies,
+                  max(eval_date) AS latest
+           FROM vendor_evaluations WHERE vendor_name_norm = $1
+           GROUP BY rating""", [key])
+
+    eval_rows = await q(
+        f"""SELECT agency, contract_id, purpose, eval_date, start_date,
+                   end_date, rating
+            FROM vendor_evaluations WHERE vendor_name_norm = $1
+            ORDER BY eval_date DESC NULLS LAST
+            LIMIT {_EVAL_DETAIL_LIMIT}""", [key])
+
+    related = await q(
+        f"""SELECT related_entity_name, relationship, city, state, country
+            FROM vendor_related_entities WHERE vendor_name_norm = $1
+              AND related_entity_name IS NOT NULL
+            ORDER BY relationship, related_entity_name
+            LIMIT {_RELATED_LIMIT}""", [key])
+    related_total = await q(
+        "SELECT count(*) AS n FROM vendor_related_entities "
+        "WHERE vendor_name_norm = $1", [key])
+
+    other_names = await q(
+        f"""SELECT type, other_name, from_date, to_date
+            FROM vendor_other_names WHERE vendor_name_norm = $1
+              AND other_name IS NOT NULL
+            ORDER BY (to_date = 'Present') DESC, type, other_name
+            LIMIT {_OTHER_NAMES_LIMIT}""", [key])
+
+    if not (entity_rows or principals or eval_summary or related or other_names):
+        return None
+
+    # Evaluations rollup. `ratings` keeps source order so a profile always reads
+    # Excellent -> Unsatisfactory, and `adverse` is called out because a Poor or
+    # Unsatisfactory MOCS rating is the single most newsworthy fact here.
+    counts = {r["rating"]: int(r["n"] or 0) for r in eval_summary if r.get("rating")}
+    total_evals = sum(counts.values())
+    evaluations = None
+    if total_evals:
+        evaluations = {
+            "total": total_evals,
+            "ratings": [{"rating": r, "count": counts[r]}
+                        for r in _RATING_ORDER if counts.get(r)]
+                       + [{"rating": r, "count": n}
+                          for r, n in sorted(counts.items())
+                          if r not in _RATING_ORDER],
+            "adverse": sum(n for r, n in counts.items() if r in _ADVERSE_RATINGS),
+            "agencies": max((int(r["agencies"] or 0) for r in eval_summary),
+                            default=0),
+            "latest": max((r["latest"] or "" for r in eval_summary),
+                          default="")[:10],
+            "showing": len(eval_rows),
+            "recent": [{
+                "agency": (r.get("agency") or "").strip(),
+                "contract_id": (r.get("contract_id") or "").strip(),
+                "purpose": (r.get("purpose") or "").strip(),
+                "date": (r.get("eval_date") or "")[:10],
+                "period_start": (r.get("start_date") or "")[:10],
+                "period_end": (r.get("end_date") or "")[:10],
+                "rating": (r.get("rating") or "").strip(),
+            } for r in eval_rows],
+        }
+
+    entity = None
+    if entity_rows:
+        e = entity_rows[0]
+        street = ", ".join(p for p in [_s(e, "address1"), _s(e, "address2")] if p)
+        # City and state are separate columns with inconsistent casing
+        # ('NEW YORK' / 'New York'); comma-separate them so the two do not run
+        # together, and collapse the stray double spaces the source ships.
+        locality = ", ".join(p for p in [_s(e, "city"), _s(e, "state")] if p)
+        if _s(e, "zip"):
+            locality = f"{locality} {_s(e, 'zip')}".strip()
+        entity = {
+            "address": re.sub(r"\s{2,}", " ",
+                              ", ".join(p for p in [street, locality] if p)),
+            "country": _s(e, "country"),
+            "telephone": _s(e, "telephone"),
+            "for_profit": _s(e, "for_profit"),
+            # The only populated DUNS we hold — vendors."DUNS Number" is 0% filled.
+            # Formatting is inconsistent at source ('008964249' vs '10-150-1608');
+            # shown verbatim rather than guessing a canonical form.
+            "duns": _s(e, "duns"),
+            "revenue": _s(e, "revenue"),
+            "symbol": _s(e, "symbol"),
+        }
+        if not any(entity.values()):
+            entity = None
+
+    return {
+        "entity": entity,
+        "principals": [{
+            "name": (p.get("principal_name") or "").strip(),
+            "title": (p.get("title") or "").strip(),
+            "ownership_type": (p.get("ownership_type") or "").strip(),
+        } for p in principals],
+        "evaluations": evaluations,
+        "related": {
+            "total": int(related_total[0]["n"]) if related_total else len(related),
+            "showing": len(related),
+            "rows": [{
+                "name": (r.get("related_entity_name") or "").strip(),
+                "relationship": (r.get("relationship") or "").strip(),
+                "location": " ".join(p for p in [_s(r, "city"), _s(r, "state")] if p),
+            } for r in related],
+        } if related else None,
+        "other_names": [{
+            "type": (n.get("type") or "").strip(),
+            "name": (n.get("other_name") or "").strip(),
+            "from": (n.get("from_date") or "")[:10],
+            "to": (n.get("to_date") or "").strip(),
+        } for n in other_names],
+    }
+
+
+# --- NY DOS legal-entity record -----------------------------------------------
+# The NY Department of State corporate registry, materialized into
+# `dos_entity_enrichment` by api/build_dos_crosswalk.py (a batch job — the
+# registry is a 9 GB DuckDB file owned by the nycdb service, so it cannot be
+# joined at request time). This is the only source here for how OLD a business
+# is, and the only one describing its legal form rather than its procurement
+# behaviour.
+#
+# ⚠ Three limits the UI must state, all inherent to the source:
+#   * nycdb filters the registry to the FIVE NYC COUNTIES, so a legitimate
+#     out-of-state vendor simply will not match;
+#   * it is ACTIVE-only — dissolved entities are absent;
+#   * matching is by normalized name (no shared id), 43% of vendors.
+_DOS_SQL = """
+    SELECT dos_id, entity_name, entity_type, jurisdiction, county,
+           initial_filing_date, registered_agent, process_name, process_address
+    FROM dos_entity_enrichment
+    WHERE passport_supplier_id = $1 AND dos_id IS NOT NULL
+    LIMIT 1
+"""
+
+
+async def _dos_profile(supplier_id: str) -> Optional[dict]:
+    """NY DOS registration record for a vendor, or None when unmatched."""
+    if not supplier_id:
+        return None
+    try:
+        rows = await PostgresModelAsync.select_safe(_DOS_SQL, [supplier_id])
+    except Exception as exc:  # noqa: BLE001 — table absent until the job runs
+        logger.warning(f"[oce] DOS lookup failed for {supplier_id}: {exc}")
+        return None
+    if not rows:
+        return None
+    r = rows[0]
+
+    filed = r.get("initial_filing_date")
+    filed_iso = filed.isoformat() if hasattr(filed, "isoformat") else (filed or "")
+    years = None
+    if filed is not None and hasattr(filed, "year"):
+        # Whole years since registration — the "business age" the procurement
+        # data cannot give us. Guarded against a future-dated filing.
+        today = datetime.now(timezone.utc).date()
+        years = today.year - filed.year - ((today.month, today.day) < (filed.month, filed.day))
+        if years < 0:
+            years = None
+
+    etype = (r.get("entity_type") or "").strip()
+    return {
+        "dos_id": (r.get("dos_id") or "").strip(),
+        "entity_name": (r.get("entity_name") or "").strip(),
+        # Registry values are SHOUTED ('DOMESTIC LIMITED LIABILITY COMPANY');
+        # title-case them for display but leave the wording untouched.
+        "entity_type": etype.title() if etype.isupper() else etype,
+        "jurisdiction": (r.get("jurisdiction") or "").strip(),
+        "county": (r.get("county") or "").strip(),
+        "registered": filed_iso,
+        "age_years": years,
+        "registered_agent": (r.get("registered_agent") or "").strip(),
+        "process_name": (r.get("process_name") or "").strip(),
+        "process_address": (r.get("process_address") or "").strip(),
+        "lookup_url": "https://apps.dos.ny.gov/publicInquiry/",
+    }
+
+
+# --- Doing Business Database (MOCS / Local Law 34) ----------------------------
+# A second, independently maintained view of who runs a company — collected to
+# enforce LL34's campaign-contribution limits rather than self-disclosed at
+# vendor registration. Adds registered LOBBYISTS, which PASSPort has not got.
+# Loaded by api/enrich_doing_business.py.
+#
+# ⚠ Joined ONLY through `doing_business_crosswalk.passport_supplier_id`, which
+# the generator populates for exact and exact-DBA name matches only. Unreviewed
+# near-misses live in `candidate_supplier_id` and therefore cannot leak into a
+# profile through this join.
+_DB_PEOPLE_LIMIT = 60
+
+
+async def _doing_business_profile(supplier_id: str) -> Optional[dict]:
+    """Doing Business principals for a PASSPort vendor, or None."""
+    if not supplier_id:
+        return None
+    try:
+        rows = await PostgresModelAsync.select_safe(
+            """SELECT p.full_name, p.role_code, p.role_label, p.role_group,
+                      p.is_organization, p.start_date, p.end_date,
+                      x.organization_name, x.confidence
+               FROM doing_business_crosswalk x
+               JOIN doing_business_people p ON p.org_name_norm = x.org_name_norm
+               WHERE x.passport_supplier_id = $1
+               ORDER BY p.is_organization,
+                        CASE p.role_group WHEN 'Principal officer' THEN 0
+                                          WHEN 'Owner' THEN 1
+                                          WHEN 'Senior manager' THEN 2
+                                          WHEN 'Lobbyist' THEN 3 ELSE 4 END,
+                        p.full_name""", [supplier_id])
+    except Exception as exc:  # noqa: BLE001 — absent on a fresh env
+        logger.warning(f"[oce] Doing Business lookup failed for {supplier_id}: {exc}")
+        return None
+    if not rows:
+        return None
+
+    entity = None
+    try:
+        erows = await PostgresModelAsync.select_safe(
+            """SELECT e.ownership_structure_code, e.ownership_structure,
+                      e.organization_phone, e.start_date
+               FROM doing_business_crosswalk x
+               JOIN doing_business_entities e ON e.org_name_norm = x.org_name_norm
+               WHERE x.passport_supplier_id = $1 LIMIT 1""", [supplier_id])
+        if erows:
+            e = erows[0]
+            entity = {
+                # Falls back to the raw code when MOCS's own data dictionary does
+                # not document it (it omits IND/JNT/GOV, and calls JNT "JV").
+                "ownership_structure": _s(e, "ownership_structure")
+                                       or _s(e, "ownership_structure_code"),
+                "phone": _s(e, "organization_phone"),
+                # Repaired at load time — every source date is missing its century.
+                "doing_business_since": _s(e, "start_date"),
+            }
+            if not any(entity.values()):
+                entity = None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[oce] Doing Business entity lookup failed: {exc}")
+
+    people, orgs = [], []
+    for r in rows[:_DB_PEOPLE_LIMIT]:
+        item = {
+            "name": (r.get("full_name") or "").strip(),
+            # Empty when MOCS publishes no public definition for the code; the
+            # frontend then shows the bare code rather than inventing a meaning.
+            "role": (r.get("role_label") or "").strip(),
+            "role_code": (r.get("role_code") or "").strip(),
+            "group": (r.get("role_group") or "").strip(),
+            "since": (r.get("start_date") or "")[:10],
+            "until": (r.get("end_date") or "")[:10],
+        }
+        if not item["name"]:
+            continue
+        # EWN rows are ORGANISATIONS that own >=10%, not people (99.9% have no
+        # first name; the surname field holds names like GOLDMAN SACHS). Kept in
+        # a separate list so the UI never labels a company as a person.
+        (orgs if r.get("is_organization") else people).append(item)
+
+    return {
+        "organization_name": (rows[0].get("organization_name") or "").strip(),
+        "match": (rows[0].get("confidence") or "").strip(),
+        "entity": entity,
+        "people": people,
+        "organizations": orgs,
+        "total": len(rows),
+        "showing": min(len(rows), _DB_PEOPLE_LIMIT),
+        "lobbyists": sum(1 for r in rows if r.get("role_group") == "Lobbyist"),
+    }
+
+
+async def _doing_business_as_of() -> str:
+    """Vintage of the Doing Business feed ('' if unknown).
+
+    ⚠ Always label this. The dataset advertises monthly automated updates but
+    `rowsUpdatedAt` has read 2025-11-21 for at least eight months.
+    """
+    try:
+        rows = await PostgresModelAsync.select_safe(
+            "SELECT last_modified FROM vendor_enrichment_meta "
+            "WHERE table_name = 'doing_business_people'")
+    except Exception:  # noqa: BLE001
+        return ""
+    return ((rows[0].get("last_modified") if rows else "") or "")[:10]
+
+
+async def _passport_as_of() -> str:
+    """Publication date of the PASSPort sub-table exports ('' if unknown).
+
+    ⚠ These five exports are refreshed only a few times a year while the vendor
+    list itself is daily, so the pages that show them must say "as of" — an
+    ownership panel that looks as fresh as the contract list would be a lie.
+    """
+    try:
+        rows = await PostgresModelAsync.select_safe(
+            "SELECT max(last_modified) AS lm FROM vendor_enrichment_meta")
+    except Exception:  # noqa: BLE001 — table absent on a fresh env
+        return ""
+    lm = (rows[0].get("lm") if rows else None) or ""
+    try:
+        # HTTP date ('Tue, 03 Feb 2026 07:00:52 GMT') -> ISO day.
+        return datetime.strptime(lm, "%a, %d %b %Y %H:%M:%S %Z").strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return ""
+
+
 @router.get("/vendor/{id}")
 async def get_vendor(id: str):
     """Get a single vendor profile with their contracts.
@@ -594,13 +1076,89 @@ async def get_vendor(id: str):
 
     contracts = await PostgresModelAsync.select_safe("SELECT * FROM contracts WHERE vendor_name = $1 ORDER BY award_amount DESC NULLS LAST", [v['Vendor Name']])
 
+    # Checkbook ACTUALS for this vendor's contracts, via the #20 normalized-id
+    # crosswalk — the same in-process map /oce/contracts already uses. The vendor
+    # profile previously showed award amounts only: no paid-to-date anywhere, even
+    # though contracts, agencies and NYCHA all show it.
+    spend_map = await _get_contract_spend_map()
+    awarded = paid = 0.0
+    payments = 0
+    for c in (contracts or []):
+        key = _normalize_contract_id(c.get('normalized_contract_id') or c.get('contract_id'))
+        _add_contract_spend(c, spend_map.get(key) if key else None)
+        paid += c.get('spent_to_date') or 0.0
+        payments += c.get('payment_count') or 0
+        try:
+            awarded += float(c.get('award_amount') or 0)
+        except (TypeError, ValueError):
+            pass
+    spend = {
+        # `available` is honest about a cold map: _get_contract_spend_map() returns
+        # {} on the first call while it populates in the background, and rendering
+        # a $0 "paid" tile for a vendor with real payments would be worse than
+        # rendering nothing. The frontend gates on this.
+        "available": bool(spend_map),
+        "awarded": awarded, "paid": paid, "payments": payments,
+        "pct_used": round(paid / awarded * 100, 1) if awarded > 0 else None,
+    }
+
+    # SBS certified-business profile (what the firm does, contact, capacity, past
+    # performance). Guarded inside the helper.
+    sbs = await _sbs_profile(v.get('Vendor Name', ''))
+
+    # PASSPort sub-tables: ownership, MOCS performance ratings, registered
+    # entity record, corporate family, DBA history. Guarded inside the helper.
+    # NY DOS legal-entity record (age, entity type, county, registered agent).
+    dos = await _dos_profile(id)
+
+    passport = await _passport_profile(v.get('Vendor Name', ''))
+    if passport:
+        passport["as_of"] = await _passport_as_of()
+
+    # Doing Business (LL34): a second custodian's view of the same company, plus
+    # registered lobbyists. Linked on exact name only — see _doing_business_profile.
+    doing_business = await _doing_business_profile(id)
+    if doing_business:
+        doing_business["as_of"] = await _doing_business_as_of()
+
     # Related City Record notices via this vendor's contract EPINs (id-based, not name).
     related_notices = await _notices_for_epins([c.get('epin', '') for c in (contracts or [])])
+
+    # NYCHA activity (crosswalked vendors only): reverse-lookup this PASSPort id
+    # in nycha_vendor_crosswalk (built by build_nycha_vendor_crosswalk.py), then
+    # aggregate the NYCHA DuckDB lake for the matched raw name(s). Guarded — the
+    # crosswalk table and the NYCHA lake are optional (fresh envs), and a hiccup
+    # here must never break the vendor profile.
+    nycha = None
+    try:
+        xw = await PostgresModelAsync.select_safe(
+            "SELECT nycha_vendor_name, confidence, match_score FROM nycha_vendor_crosswalk "
+            "WHERE passport_supplier_id = $1", [id])
+        names = [r['nycha_vendor_name'] for r in (xw or []) if r.get('nycha_vendor_name')]
+        if names:
+            from routers.nycha import vendor_activity_for_names
+            act = await to_duckdb_thread(vendor_activity_for_names, names)
+            if act:
+                # Surface HOW the link was made (curated / exact / fuzzy + score) so
+                # a name-matched join is auditable rather than presented as fact.
+                best = (xw or [])[0]
+                nycha = {"names": names,
+                         "match": {"confidence": best.get("confidence") or "",
+                                   "score": float(best["match_score"]) if best.get("match_score") is not None else None},
+                         **act}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[oce] NYCHA vendor activity lookup failed for {id}: {exc}")
 
     return {
         "vendor": vendor,
         "contracts": contracts or [],
-        "related_notices": related_notices
+        "spend": spend,
+        "sbs": sbs,
+        "passport": passport,
+        "doing_business": doing_business,
+        "dos": dos,
+        "related_notices": related_notices,
+        "nycha": nycha
     }
 
 
@@ -700,27 +1258,34 @@ def _query_contract_spend_map(target_keys) -> dict:
     per-contract values (verified) at ~75 MB. Normalization + grouping run in SQL,
     matching _normalize_contract_id exactly (upper, strip non-alnum), so two raw
     ids that normalize together are merged by GROUP BY. Must run under
-    asyncio.to_thread."""
+    to_duckdb_thread."""
     if not target_keys:
         return {}
     con = _persistent_spending_connection().cursor()
     files = get_spending_files(all_years=True)
     rows = con.execute(
         f"SELECT nkey, SUM(TRY_CAST(check_amount AS DOUBLE)) AS spent, COUNT(*) AS n, "
-        f"MIN(issue_date) AS first_date, MAX(issue_date) AS last_date FROM ("
+        f"MIN(issue_date) AS first_date, MAX(issue_date) AS last_date, "
+        # Raw ids that do NOT already equal their normalized form. This is what
+        # lets _query_contract_detail filter on the raw column (which the Parquet
+        # row-group statistics can prune) instead of re-normalizing every row.
+        # Free here: this scan already computes nkey and is already grouped.
+        f"ARRAY_AGG(DISTINCT contract_id) FILTER (WHERE contract_id <> nkey) AS variants "
+        f"FROM ("
         f"  SELECT REGEXP_REPLACE(UPPER(contract_id), '[^A-Z0-9]', '', 'g') AS nkey, "
-        f"         check_amount, issue_date "
+        f"         contract_id, check_amount, issue_date "
         f"  FROM read_parquet({files}) WHERE contract_id IS NOT NULL AND contract_id != ''"
         f") WHERE nkey IN (SELECT unnest(?::VARCHAR[])) GROUP BY nkey",
         [list(target_keys)],
     ).fetchall()
     con.close()
     out: Dict[str, dict] = {}
-    for nkey, spent, n, first_date, last_date in rows:
+    for nkey, spent, n, first_date, last_date, variants in rows:
         if not nkey:
             continue
         out[nkey] = {"spent_to_date": float(spent or 0), "payment_count": int(n or 0),
-                     "first_payment": first_date, "last_payment": last_date}
+                     "first_payment": first_date, "last_payment": last_date,
+                     "raw_variants": list(variants or [])}
     return out
 
 
@@ -742,7 +1307,7 @@ async def _populate_contract_spend() -> None:
             k = _normalize_contract_id(r.get('normalized_contract_id') or r.get('contract_id'))
             if k:
                 targets.add(k)
-        m = await asyncio.to_thread(_query_contract_spend_map, targets)
+        m = await to_duckdb_thread(_query_contract_spend_map, targets)
         _contract_spend_cache['data'] = m
         _contract_spend_cache['ts'] = time.time()
         logger.info(f"[contracts] spend map ready ({len(m)} contracts, {len(targets)} targets)")
@@ -782,9 +1347,37 @@ def _add_contract_spend(contract: dict, spend: Optional[dict]) -> dict:
     return contract
 
 
-def _query_contract_detail(normalized_id: str, first_date: Optional[str], last_date: Optional[str]) -> dict:
+def _query_contract_detail(normalized_id: str, first_date: Optional[str],
+                           last_date: Optional[str],
+                           raw_variants: Optional[list] = None) -> dict:
     """Timeline (by month) + top payee/sub-vendor rollup for one contract. Scans only
-    the fiscal years the contract has payments in (from the spend map) to bound cost."""
+    the fiscal years the contract has payments in (from the spend map) to bound cost.
+
+    Two things keep this cheap, both measured on prod 2026-07-27 against contract
+    CT182620151425458 (1,592 payments spanning FY2015-FY2026, the worst case found):
+
+    1. **Filter the RAW column, never a function of it.** This used to test
+       `regexp_replace(upper(contract_id), ...) = ?`, which forces DuckDB to
+       decode and re-normalize every row of every scanned partition — no
+       row-group pruning is possible against a computed expression. The lake
+       already stores contract_id un-dashed and uppercase, so plain equality
+       returns byte-identical results while letting the Parquet statistics skip
+       whole row groups: 4.53s -> 0.82s on the timeline query alone.
+
+       Correctness is not assumed: 13,783 of 26.3M rows (0.05%) DO carry a raw
+       id that normalization would change (dashed `PON...` purchase orders,
+       1,131 distinct). `_query_contract_spend_map` collects those per contract
+       as `raw_variants` — free, since it already computes nkey — and they are
+       added to the IN list here. Today that set is empty for every one of the
+       36,421 real contracts, but a future Checkbook refresh introducing one
+       will be picked up automatically rather than silently dropping payments.
+
+    2. **One scan, not two.** The timeline and payee rollups need exactly the
+       same filtered rows, so they are materialized once and aggregated twice:
+       1.59s -> 0.79s. Total for the worst case: 8.69s -> 0.79s (~11x).
+
+    Must run under to_duckdb_thread.
+    """
     fys = sorted({fy for fy in (_fy_of(first_date), _fy_of(last_date)) if fy})
     if fys:
         years = list(range(min(fys), max(fys) + 1))
@@ -794,28 +1387,39 @@ def _query_contract_detail(normalized_id: str, first_date: Optional[str], last_d
         files = "[" + ", ".join(u for u in urls if u) + "]"
     else:
         files = get_spending_files(all_years=True)
+
+    ids = [normalized_id] + [v for v in (raw_variants or []) if v and v != normalized_id]
+    ph = ", ".join("?" for _ in ids)
     con = _persistent_spending_connection().cursor()
-    norm_expr = "regexp_replace(upper(contract_id), '[^A-Z0-9]', '', 'g')"
-    timeline = con.execute(
-        f"SELECT strftime(TRY_CAST(issue_date AS DATE), '%Y-%m') AS m, "
-        f"COALESCE(SUM(TRY_CAST(check_amount AS DOUBLE)), 0) AS t "
-        f"FROM read_parquet({files}) WHERE {norm_expr} = ? AND issue_date IS NOT NULL "
-        f"GROUP BY m ORDER BY m", [normalized_id]
-    ).fetchall()
-    vendors = con.execute(
-        f"SELECT payee_name, sub_vendor, associated_prime_vendor, "
-        f"COALESCE(SUM(TRY_CAST(check_amount AS DOUBLE)), 0) AS spent, COUNT(*) AS n "
-        f"FROM read_parquet({files}) WHERE {norm_expr} = ? "
-        f"GROUP BY payee_name, sub_vendor, associated_prime_vendor ORDER BY spent DESC LIMIT 25",
-        [normalized_id]
-    ).fetchall()
+    row = con.execute(
+        f"WITH payments AS MATERIALIZED ("
+        f"  SELECT issue_date, check_amount, payee_name, sub_vendor, associated_prime_vendor "
+        f"  FROM read_parquet({files}) WHERE contract_id IN ({ph})"
+        f"), tl AS ("
+        f"  SELECT strftime(TRY_CAST(issue_date AS DATE), '%Y-%m') AS m, "
+        f"         COALESCE(SUM(TRY_CAST(check_amount AS DOUBLE)), 0) AS t "
+        f"  FROM payments WHERE issue_date IS NOT NULL GROUP BY m"
+        f"), vn AS ("
+        f"  SELECT payee_name, sub_vendor, associated_prime_vendor, "
+        f"         COALESCE(SUM(TRY_CAST(check_amount AS DOUBLE)), 0) AS spent, COUNT(*) AS n "
+        f"  FROM payments GROUP BY 1, 2, 3 ORDER BY spent DESC LIMIT 25"
+        f") SELECT "
+        f"  (SELECT list({{'m': m, 't': t}} ORDER BY m) FROM tl), "
+        f"  (SELECT list({{'p': payee_name, 'sv': sub_vendor, 'pv': associated_prime_vendor, "
+        f"                 's': spent, 'n': n}} ORDER BY spent DESC) FROM vn)",
+        ids
+    ).fetchone()
     con.close()
+
+    timeline = (row[0] if row else None) or []
+    vendors = (row[1] if row else None) or []
     return {
-        "timeline": {"labels": [r[0] for r in timeline], "values": [float(r[1]) for r in timeline]},
+        "timeline": {"labels": [r["m"] for r in timeline],
+                     "values": [float(r["t"]) for r in timeline]},
         "vendors": [
-            {"payee": v[0], "is_sub_vendor": (v[1] == "Yes"),
-             "prime_vendor": (v[2] if v[2] and v[2] != "N/A" else None),
-             "spent": float(v[3]), "payments": int(v[4])}
+            {"payee": v["p"], "is_sub_vendor": (v["sv"] == "Yes"),
+             "prime_vendor": (v["pv"] if v["pv"] and v["pv"] != "N/A" else None),
+             "spent": float(v["s"]), "payments": int(v["n"])}
             for v in vendors
         ],
     }
@@ -1087,11 +1691,35 @@ async def get_contract(id: str):
     if key and spend_map.get(key):
         try:
             e = spend_map[key]
-            detail = await asyncio.to_thread(
-                _query_contract_detail, key, e.get("first_payment"), e.get("last_payment")
+            detail = await to_duckdb_thread(
+                _query_contract_detail, key, e.get("first_payment"), e.get("last_payment"),
+                e.get("raw_variants")
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"[contract {id}] detail query failed: {exc}")
+
+    # MOCS performance evaluations for THIS contract. The evaluations export
+    # carries a contract id on every row, and 27.7% of our contracts have at
+    # least one — the agency's own end-of-period assessment of how the work
+    # went, which nothing else on this page reports. Joined on the normalized
+    # id (the export uses the same 'CT1-068-20248800127' shape we do).
+    evaluations = []
+    if key:
+        try:
+            rows = await PostgresModelAsync.select_safe(
+                """SELECT agency, purpose, eval_date, start_date, end_date, rating
+                   FROM vendor_evaluations WHERE contract_id_norm = $1
+                   ORDER BY eval_date DESC NULLS LAST LIMIT 25""", [key])
+            evaluations = [{
+                "agency": (r.get("agency") or "").strip(),
+                "purpose": (r.get("purpose") or "").strip(),
+                "date": (r.get("eval_date") or "")[:10],
+                "period_start": (r.get("start_date") or "")[:10],
+                "period_end": (r.get("end_date") or "")[:10],
+                "rating": (r.get("rating") or "").strip(),
+            } for r in (rows or [])]
+        except Exception as exc:  # noqa: BLE001 — table absent on a fresh env
+            logger.warning(f"[contract {id}] evaluations lookup failed: {exc}")
 
     return {
         "contract": contract,
@@ -1099,6 +1727,8 @@ async def get_contract(id: str):
         "solicitation": solicitation,
         "spend_timeline": detail["timeline"],
         "spend_vendors": detail["vendors"],
+        "evaluations": evaluations,
+        "evaluations_as_of": await _passport_as_of() if evaluations else "",
         "related_notices": await _notices_for_epins([contract.get('epin', '')])
     }
 
@@ -1206,7 +1836,7 @@ def _scan_contract_spend(normed_ids: list) -> dict:
     """SUM(check_amount) per contract over recent-FY Checkbook Parquet, keyed by
     the normalized (upper, alnum-only) contract id so it joins to
     contracts.normalized_contract_id. Blocking DuckDB S3 scan — call via
-    asyncio.to_thread. Returns {} on any failure (best-effort enrichment)."""
+    to_duckdb_thread. Returns {} on any failure (best-effort enrichment)."""
     if not normed_ids:
         return {}
     con = _persistent_spending_connection().cursor()
@@ -1235,7 +1865,7 @@ async def _populate_digital_spend(vendor_list: str) -> None:
             f"""SELECT DISTINCT normalized_contract_id AS n FROM contracts
                 WHERE vendor_name IN ({vendor_list}) AND normalized_contract_id IS NOT NULL""")
         ids = [str(r['n']).upper() for r in (idrows or []) if r.get('n')]
-        spend = await asyncio.to_thread(_scan_contract_spend, ids)
+        spend = await to_duckdb_thread(_scan_contract_spend, ids)
         _digital_spend_cache['data'] = spend
         _digital_spend_cache['ts'] = time.time()
         _digital_reform_cache.clear()  # force recompute so spend/utilization show
@@ -2672,10 +3302,10 @@ def _spending_where(filters: dict) -> tuple:
 def _query_transactions(filters: dict, sort: str, order: str, limit: int, offset: int) -> dict:
     """Run a synchronous DuckDB query against S3 Parquet spending data.
 
-    Must be called via asyncio.to_thread to avoid blocking the event loop.
+    Must be called via to_duckdb_thread to avoid blocking the event loop.
     """
     # Reuse the persistent connection (warm S3 metadata cache) via an independent
-    # cursor so it's safe to run inside asyncio.to_thread.
+    # cursor so it's safe to run inside to_duckdb_thread.
     con = _persistent_spending_connection().cursor()
     files = get_spending_files(filters.get("fiscal_year"))
     where_str, params = _spending_where(filters)
@@ -2771,7 +3401,7 @@ async def list_transactions(
         return cached["data"]
 
     try:
-        result = await asyncio.to_thread(
+        result = await to_duckdb_thread(
             _query_transactions, filters, sort, order, limit, offset
         )
     except Exception as exc:
@@ -2894,7 +3524,7 @@ async def get_transactions_charts():
 
     # Cache miss — compute live and trigger async regeneration
     try:
-        result = await asyncio.to_thread(_query_spending_charts)
+        result = await to_duckdb_thread(_query_spending_charts)
         # Write cache for next request
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         with open(cache_path, "w") as f:
@@ -2983,7 +3613,7 @@ async def get_transactions_facets(
     if cached and (time.time() - cached["ts"]) < SPENDING_AGG_CACHE_TTL:
         return cached["data"]
     try:
-        result = await asyncio.to_thread(_query_spending_facets, filters)
+        result = await to_duckdb_thread(_query_spending_facets, filters)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Facet query failed: {exc}")
     if len(_spending_facets_cache) >= 200:
@@ -3042,7 +3672,7 @@ async def get_spending_top(fiscal_year: Optional[int] = None, limit: int = 5):
     if cached and (time.time() - cached["ts"]) < SPENDING_AGG_CACHE_TTL:
         return cached["data"]
     try:
-        result = await asyncio.to_thread(_query_spending_top, fiscal_year, limit)
+        result = await to_duckdb_thread(_query_spending_top, fiscal_year, limit)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Top-N query failed: {exc}")
 
@@ -3146,7 +3776,7 @@ async def get_subvendors(fiscal_year: Optional[int] = None, limit: int = 8, agen
     if cached and (time.time() - cached["ts"]) < SPENDING_AGG_CACHE_TTL:
         return cached["data"]
     try:
-        result = await asyncio.to_thread(_query_subvendors, fiscal_year, limit, agency)
+        result = await to_duckdb_thread(_query_subvendors, fiscal_year, limit, agency)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Sub-vendor query failed: {exc}")
 
@@ -3263,7 +3893,7 @@ async def get_capital_spending_by_year(years: int = 10):
         con.close()
         return rows
 
-    rows = await asyncio.to_thread(_q)
+    rows = await to_duckdb_thread(_q)
     series = [(int(fy), float(a or 0)) for fy, a in rows if fy is not None]
     if series:
         cur = max(fy for fy, _ in series)  # current FY is partial — exclude it
@@ -3294,7 +3924,7 @@ async def get_spending_mwbe(fiscal_year: Optional[int] = None, limit: int = 15, 
     if cached and (time.time() - cached["ts"]) < SPENDING_AGG_CACHE_TTL:
         return cached["data"]
     try:
-        result = await asyncio.to_thread(_query_mwbe, fiscal_year, limit, agency)
+        result = await to_duckdb_thread(_query_mwbe, fiscal_year, limit, agency)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"M/WBE query failed: {exc}")
     _mwbe_cache[cache_key] = {"data": result, "ts": time.time()}
@@ -3367,7 +3997,7 @@ async def export_transactions(
         "date_from": date_from, "date_to": date_to,
     }
     try:
-        csv_text, n = await asyncio.to_thread(_query_transactions_export, filters, sort, order)
+        csv_text, n = await to_duckdb_thread(_query_transactions_export, filters, sort, order)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}")
     fy_label = fiscal_year or "recent"

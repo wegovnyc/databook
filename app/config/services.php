@@ -30,4 +30,14 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    /*
+     | Payload CMS (Sarapis multi-brand) — source for blog articles.
+     | Read via config() not env(), because the image runs `artisan config:cache`
+     | (env() returns null at runtime once config is cached).
+     */
+    'payload' => [
+        'url' => env('PAYLOAD_URL', 'https://next.sarapis.org'),
+        'site_key' => env('PAYLOAD_SITE_KEY', 'databook'),
+    ],
+
 ];

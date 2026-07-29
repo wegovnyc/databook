@@ -65,6 +65,17 @@ DOMAINS = {
                  "responsibility_center", "revenue_category", "revenue_class"],
         "nums": ["adopted", "modified", "recognized", "remaining"],
     },
+    # Payroll — annual rollup (agency/title/payroll_type grain) produced by the
+    # extractor, which pre-sums the additive pay amounts. Single-file per the
+    # assessment (~150 MB); served by routers/payroll.py. `records` = payment-row
+    # count; salary_sum/count give a headcount-free average annual salary.
+    "payroll": {
+        "out_key": "payroll/payroll.parquet",
+        "year_col": "fiscal_year",
+        "text": ["agency", "title", "payroll_type"],
+        "nums": ["gross", "base", "overtime", "other", "records",
+                 "salary_sum", "salary_count", "salary_min", "salary_max"],
+    },
     # NYCHA contracts — stored line-grain (contract-level columns only); the API
     # aggregates to one row per contract_id at query time (routers/nycha.py).
     "nycha_contracts": {

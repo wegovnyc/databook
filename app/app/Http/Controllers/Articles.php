@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Services\StrapiService;
+use App\Services\PayloadService;
 use App\Custom\Breadcrumbs;
 use Illuminate\Support\Str;
 
@@ -17,16 +17,15 @@ class Articles extends Controller
      */
     public function show($slug)
     {
-        $strapi = new StrapiService();
-        $article = $strapi->getArticleBySlug($slug);
+        $cms = new PayloadService();
+        $article = $cms->getArticleBySlug($slug);
 
         if (!$article) {
             abort(404);
         }
 
-        // Parse content - rudimentary markdown/html handling if needed, 
-        // but Strapi usually returns rich text HTML or blocks.
-        // Assuming 'content' is HTML or we display as raw.
+        // `content` arrives as HTML (PayloadService renders Payload's Lexical
+        // rich text), so the view can output it raw.
 
         return view('article', [
             'article' => $article,
@@ -45,8 +44,8 @@ class Articles extends Controller
      */
     public function index()
     {
-        $strapi = new StrapiService();
-        $articles = $strapi->getAllArticles('Databook', 100);
+        $cms = new PayloadService();
+        $articles = $cms->getAllArticles('Databook', 100);
 
         return view('blog', [
             'articles' => $articles,

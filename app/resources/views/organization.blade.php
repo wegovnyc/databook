@@ -38,6 +38,41 @@
 						</div>
 					@endif
 
+					@php
+						// Greenbook-derived leadership + address (see api/enrich_agency.py).
+						// Address prefers the WeGov seed, falls back to the derived value.
+						// NOTE: precompute badge label/title in PHP — Blade won't compile an
+						// @if glued to a preceding word char (e.g. "derived@if(...)").
+						$headName    = trim($org['derived_head_name'] ?? '');
+						$headTitle   = trim($org['derived_head_title'] ?? '');
+						$headTierB   = ($org['derived_head_confidence'] ?? '') === 'B';
+						$seedAddr    = trim($org['main_address'] ?? '');
+						$addr        = $seedAddr !== '' ? $seedAddr : trim($org['derived_address'] ?? '');
+						$addrDerived = $seedAddr === '' && trim($org['derived_address'] ?? '') !== '';
+						$headBadge   = 'derived' . ($headTierB ? ' · verify' : '');
+						$headBadgeTip = 'Derived from the NYC Greenbook' . ($headTierB ? ' — director-tier match, verify' : '');
+					@endphp
+					@if ($headName !== '' || $addr !== '')
+						<div class="mt-4">
+							@if ($headName !== '')
+								<div class="mb-1">
+									<i class="bi bi-person-badge text-muted"></i>
+									<span class="fw-semibold">{{ $headName }}</span>@if($headTitle !== '')<span class="text-muted">, {{ $headTitle }}</span>@endif
+									<span class="db-badge db-badge-neutral" style="font-size: .62em; vertical-align: middle;" title="{{ $headBadgeTip }}">{{ $headBadge }}</span>
+								</div>
+							@endif
+							@if ($addr !== '')
+								<div>
+									<i class="bi bi-geo-alt text-muted"></i>
+									<span>{{ $addr }}</span>
+									@if($addrDerived)
+										<span class="db-badge db-badge-neutral" style="font-size: .62em; vertical-align: middle;" title="Derived from the NYC Greenbook (no address in the WeGov seed)">derived</span>
+									@endif
+								</div>
+							@endif
+						</div>
+					@endif
+
 				</div>
 				<div class="col-md-{{ $w }} mt-3" id="org_summary">
 					<div class="db-card organization_summary">

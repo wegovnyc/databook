@@ -19,9 +19,11 @@ import asyncio
 import hashlib
 import logging
 import re
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query
 from modules.postgrex.asyncmodel import PostgresModelAsync
+from modules.duckpool import to_duckdb_thread
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Search"])
@@ -219,12 +221,36 @@ async def _people(like, term, prefix, limit):
     return out
 
 
+# NYCHA vendors live in the DuckDB lake (not Postgres) — a separate authority
+# whose vendors have no City PASSPort row. Federate them so a search finds e.g.
+# ADAMS EUROPEAN CONTRACTING (a top NYCHA vendor with no City profile). Matched
+# vendors link to the City profile; unmatched to the NYCHA-native profile.
+_NYCHA_SLUG = "170020034-nyc-housing-authority"
+
+
+async def _nycha_vendors(like, term, prefix, limit):
+    from routers import nycha  # lazy: avoid import cycle; DuckDB-backed
+    rows = await to_duckdb_thread(nycha.search_vendors, term, limit)
+    out = []
+    for r in rows:
+        name = r.get("vendor") or ""
+        if r.get("vendor_id"):
+            url = f"/procurement/vendor/{r['vendor_id']}"
+        else:
+            url = f"/o/{_NYCHA_SLUG}/procurement-nycha-vendor?name={quote(name)}"
+        n = r.get("contracts") or 0
+        meta = "NYCHA Vendor" + (f" · {n} contract{'' if n == 1 else 's'}" if n else "")
+        out.append({"title": name, "url": url, "meta": meta})
+    return out
+
+
 # (key, label, builder) — order is also the typeahead's type-priority order.
 GROUPS_DEF = [
     ("organizations", "Organizations", _orgs),
     ("people", "People", _people),
     ("titles", "Civil Service Titles", _titles),
     ("contracts", "Contracts", _contracts),
+    ("nycha_vendors", "NYCHA Vendors", _nycha_vendors),
     ("solicitations", "Solicitations", _solicitations),
     ("projects", "Capital Projects", _projects),
     ("schools", "Schools", _schools),
@@ -233,7 +259,7 @@ GROUPS_DEF = [
 
 # Typeahead surfaces only types that resolve to a real on-site detail page —
 # excludes solicitations (link to a list, not a row) and notices (external).
-SUGGEST_KEYS = {"organizations", "people", "titles", "contracts", "projects", "schools"}
+SUGGEST_KEYS = {"organizations", "people", "titles", "contracts", "nycha_vendors", "projects", "schools"}
 
 
 def _prep(q: str):

@@ -269,6 +269,7 @@ Route::get('/procurement/transactions', 'ProcurementController@transactions')->n
 Route::get('/procurement/transactions/search', 'ProcurementController@transactionsSearch')->name('procurement.transactions.search');
 Route::get('/procurement/budget', 'BudgetRevenueController@budget')->name('procurement.budget');
 Route::get('/procurement/revenue', 'BudgetRevenueController@revenue')->name('procurement.revenue');
+Route::get('/procurement/payroll', 'BudgetRevenueController@payroll')->name('procurement.payroll');
 Route::get('/procurement/nycha', 'NychaController@index')->name('procurement.nycha');
 Route::get('/procurement/nycha/budget', 'NychaController@budget')->name('procurement.nycha.budget');
 Route::get('/procurement/nycha/revenue', 'NychaController@revenue')->name('procurement.nycha.revenue');

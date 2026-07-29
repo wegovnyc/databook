@@ -29,6 +29,9 @@ from enrich_fire_data import (
     enrich_violations_hook,
     enrich_dispatch_hook,
 )
+from enrich_agency import derive_agency_enrichment_hook
+from enrich_vendor import derive_vendor_enrichment_hook
+from enrich_doing_business import derive_doing_business_hook
 
 
 def dedupe_columns(columns: list) -> list:
@@ -114,6 +117,17 @@ POST_INGEST_HOOKS = {
     "fdny_inspections": [enrich_inspections_hook],
     "fdny_violations": [enrich_violations_hook],
     "fire_incident_dispatch": [enrich_dispatch_hook],
+    # Greenbook drives derived agency leadership + address tables (agency heads
+    # aren't in any NYC dataset; wegov_orgs addresses are a thin static seed).
+    "nycgreenbook": [derive_agency_enrichment_hook],
+    # The five PASSPort vendor sub-tables (principals, evaluations, entity
+    # summary, related entities, other names) join to `vendors` on normalized
+    # name, so they are reloaded whenever the vendor list is. The hook HEADs
+    # each export first and skips unchanged ones, so most days it is a no-op.
+    # Doing Business (LL34) is name-matched against the vendor list, so its
+    # crosswalk must be rebuilt whenever that list changes — even on the days
+    # the MOCS feed itself is unchanged (it has not moved since 2025-11-21).
+    "vendors": [derive_vendor_enrichment_hook, derive_doing_business_hook],
 }
 
 
@@ -296,7 +310,18 @@ async def full_replace_import(conn: asyncpg.Connection, ds: dict,
         reader = csv.DictReader(io.StringIO(csv_text))
         rows = list(reader)
         if not rows:
-            return {"status": "fail", "error": "Empty CSV"}
+            # Distinguish the two zero-row cases in the error we store on the
+            # registry, because they need different responses. A header with no
+            # data rows means the SOURCE is publishing an empty dataset (NYC Open
+            # Data jvk9-k4re did exactly this on 2026-07-01) — nothing to retry,
+            # and scripts/dataset-staleness.sh will report it against the City's
+            # own LL251 row count. No header at all means a truncated or broken
+            # response, which is worth investigating on our side.
+            if reader.fieldnames:
+                return {"status": "fail",
+                        "error": f"Source published {len(reader.fieldnames)} "
+                                 f"columns and 0 data rows (empty at source)"}
+            return {"status": "fail", "error": "Empty CSV (no header in response)"}
 
         columns = list(rows[0].keys())
 
@@ -765,7 +790,23 @@ async def send_unmapped_alert(table_name: str, entity_col: str,
         )
         print(f"[alert] Unmapped entity alert sent for {table_name}")
     except Exception as e:
-        print(f"[alert] Failed to send alert: {e}")
+        # SES is not reachable from prod: the AWS credentials were removed when
+        # the data lake moved off S3 (2026-07-11), so boto3 finds none and every
+        # send fails here. Printing alone meant the signal died in a container
+        # log. Fall back to Sentry, which IS wired, so the finding still lands
+        # somewhere a human looks. The rows are in unmapped_entities regardless,
+        # and /pipeline/unmapped + the admin Data Health page read them.
+        print(f"[alert] Failed to send alert email: {e}")
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(
+                f"{len(new_entities)} new unmapped {entity_col} value(s) in "
+                f"{table_name} (email alert unavailable: {e}). "
+                f"Sample: {', '.join(new_entities[:10])}",
+                level="warning",
+            )
+        except Exception as se:
+            print(f"[alert] Sentry fallback also failed: {se}")
 
 
 async def send_staleness_alert(stale_datasets: list[dict]):
@@ -1548,6 +1589,9 @@ async def run_data_check(conn: asyncpg.Connection = None):
         # End-to-end health check: compare Socrata counts vs Postgres
         await _run_completeness_check(conn, session)
 
+        # Unmapped-entity sweep, independent of what was ingested this cycle
+        await _run_unmapped_scan(conn)
+
         # Rebuild cached homepage stats
         await rebuild_glob_stats(conn)
 
@@ -1563,6 +1607,57 @@ async def run_data_check(conn: asyncpg.Connection = None):
     finally:
         if own_conn:
             await conn.close()
+
+
+async def _run_unmapped_scan(conn):
+    """Scan every scannable dataset for entity values with no canonical id.
+
+    Why this is its own end-of-cycle pass, like _run_completeness_check:
+
+    scan_unmapped_entities() was only ever called as a post-step inside the
+    ingest functions, and in production it therefore never ran at all:
+
+      * Normalizer-driven datasets — most of them, and precisely the ones with
+        entity columns — are ingested by the NORMALIZER's own daily sweep, which
+        pushes to this api's /import-csv. That endpoint does not scan.
+      * The api scheduler then reaches the same dataset, sees
+        `source_updated <= last_ingested` (already stamped by /import-csv),
+        prints "up to date" and returns — before its scan call.
+
+    So the scan was starved by the success of the other path. Measured on prod
+    2026-07-29: 18 unmapped values existed across 9 scannable datasets while
+    unmapped_entities held 0 rows, and /pipeline/health reported
+    "total_alerts: 0" — a clean bill of health from a check that had never run.
+
+    Running it as a sweep decouples it from ingest outcomes entirely: it does not
+    matter which scheduler moved the data, or whether anything moved at all.
+    Idempotent — scan_unmapped_entities only records values it has not seen.
+    """
+    datasets = await get_active_datasets(conn)
+    scanned = 0
+    total_new = 0
+
+    for ds in datasets:
+        if not ds.get('needs_normalization') or not ds.get('entity_column'):
+            continue
+        table_name = ds['table_name']
+        try:
+            new_unmapped = await scan_unmapped_entities(conn, ds)
+            scanned += 1
+            if new_unmapped:
+                total_new += len(new_unmapped)
+                await send_unmapped_alert(
+                    table_name,
+                    ds.get('entity_column', ''),
+                    new_unmapped,
+                    ds.get('normalizer_dataset_id'),
+                )
+        except Exception as e:
+            # One bad table must not abort the sweep.
+            print(f"[unmapped-scan] {table_name}: failed — {e}")
+
+    print(f"[unmapped-scan] Scanned {scanned} datasets, "
+          f"{total_new} new unmapped entities")
 
 
 async def _run_completeness_check(conn, session):
@@ -1793,6 +1888,12 @@ async def process_extractor_dataset(conn: asyncpg.Connection, ds: dict,
                               last_checked_at=now,
                               estimated_rows=result.get('rows'),
                               last_error=None)
+
+        # The Socrata and normalizer paths both do this; the extractor path
+        # never did, so a hook registered on `vendors`/`contracts` would have
+        # been silently dead. Registering a hook that never fires is worse
+        # than having no hook, because the data looks maintained.
+        await run_post_ingest_hooks(table_name, conn)
 
         new_unmapped = await scan_unmapped_entities(conn, ds)
         if new_unmapped:

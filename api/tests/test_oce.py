@@ -285,3 +285,72 @@ def test_digital_reform_cache_lru_and_ttl():
         assert "stale" not in oce._digital_reform_cache
     finally:
         oce._digital_reform_cache.clear()
+
+
+# --- vendor profile enrichment (SBS + Checkbook actuals) ----------------------
+
+@pytest.mark.asyncio
+async def test_sbs_profile_shapes_jobs_and_handles_job1_naming(monkeypatch):
+    """SBS enrichment: builds the past-performance list, tolerates the source's
+    inconsistent job-1 value column (`Largest_Value_of_Contract`), and skips
+    job slots with no client."""
+    from unittest.mock import AsyncMock
+    from modules.postgrex.asyncmodel import PostgresModelAsync
+    from routers import oce
+    row = {
+        "Account_Number": "12345", "Vendor_Formal_Name": "ACME BUILDERS, INC.",
+        "Vendor_DBA": "ACME", "Business_Description": "General construction",
+        "Certification": "MBE", "Certification_Renewal_Date": "2027-03-01T00:00:00",
+        "Website": "acme.example", "telephone": "2125550000",
+        "Date_Of_Establishment": "1998-05-04T00:00:00", "Aggregate_Bonding_Limit": "5000000",
+        "Signatory_To_Union_Contracts": "Yes", "NAICS_Title": "Commercial Building Construction",
+        "NAICS_Sector": "Construction", "NAICS_Subsector": "Buildings",
+        "ID6_digit_NAICS_code": "236220", "Types_of_Construction_Projects_Performed": "Schools",
+        "Capacity_Building_Programs": "", "Enrolled_in_PASSPort": "Yes", "Borough": "Bronx",
+        "City": "Bronx", "State": "NY",
+        # job 1 present (note the oddly-named value column), job 2 blank, job 3 present
+        "Name_of_Client_Job_Exp_1": "SCA", "Largest_Value_of_Contract": "2000000",
+        "Date_of_Work_Job_Exp_1": "2023", "Description_of_Work_Job_Exp_1": "PS 1 roof",
+        "Name_of_Client_Job_Exp_2": "  ", "Value_of_Contract_Job_Exp_2": "999",
+        "Date_of_Work_Job_Exp_2": "", "Description_of_Work_Job_Exp_2": "",
+        "Name_of_Client_Job_Exp_3": "DDC", "Value_of_Contract_Job_Exp_3": "750000",
+        "Date_of_Work_Job_Exp_3": "2021", "Description_of_Work_Job_Exp_3": "Library",
+    }
+    monkeypatch.setattr(PostgresModelAsync, "select_safe", AsyncMock(return_value=[row]))
+    out = await oce._sbs_profile("Acme Builders Inc")
+    assert out["certification"] == "MBE"
+    assert out["naics_title"] == "Commercial Building Construction"
+    assert out["established"] == "1998-05-04"        # trimmed to a date
+    assert out["certification_renewal"] == "2027-03-01"
+    assert [j["client"] for j in out["jobs"]] == ["SCA", "DDC"]   # blank slot skipped
+    assert out["jobs"][0]["value"] == "2000000"      # job-1 quirk column read
+    assert out["jobs"][1]["value"] == "750000"
+
+
+@pytest.mark.asyncio
+async def test_sbs_profile_returns_none_when_absent(monkeypatch):
+    """No SBS row (or a failing/missing table) yields None, never an exception."""
+    from unittest.mock import AsyncMock
+    from modules.postgrex.asyncmodel import PostgresModelAsync
+    from routers import oce
+    monkeypatch.setattr(PostgresModelAsync, "select_safe", AsyncMock(return_value=[]))
+    assert await oce._sbs_profile("Nobody Ltd") is None
+    monkeypatch.setattr(PostgresModelAsync, "select_safe",
+                        AsyncMock(side_effect=Exception('relation "sbscertifiedbiz" does not exist')))
+    assert await oce._sbs_profile("Nobody Ltd") is None
+    assert await oce._sbs_profile("") is None        # empty name short-circuits
+
+
+def test_add_contract_spend_exposes_payment_window():
+    """first_payment/last_payment are attached (they were computed and dropped
+    before) so the profile can show the real payment window vs the contract term."""
+    from routers.oce import _add_contract_spend
+    c = _add_contract_spend({"award_amount": "1000"}, {
+        "spent_to_date": 250.0, "payment_count": 4,
+        "first_payment": "2024-01-05", "last_payment": "2025-06-30"})
+    assert c["spent_to_date"] == 250.0 and c["payment_count"] == 4
+    assert c["first_payment"] == "2024-01-05" and c["last_payment"] == "2025-06-30"
+    assert c["pct_used"] == 25.0
+    # no spend row -> zeros, not None, and no pct for a $0 award
+    c2 = _add_contract_spend({"award_amount": 0}, None)
+    assert c2["spent_to_date"] == 0.0 and c2["pct_used"] is None

@@ -4,6 +4,7 @@ Data Pipeline API routes — registry CRUD, health dashboard, manual triggers.
 Mounted as a FastAPI router at the /pipeline prefix.
 """
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -397,24 +398,41 @@ async def data_health():
         'websitedata': ['Organizations'],
     }
 
-    # Fetch normalizer task/alert count per dataset
+    # Fetch normalizer task/alert count per dataset.
+    #
+    # ⚠ This reported 0 for everything. /tasks returns {"tasks": [...]}, a DICT,
+    # and the old code did `for t in resp.json()` — iterating a dict yields its
+    # KEYS, so `t.get(...)` raised AttributeError on the string "tasks" and the
+    # bare `except: pass` swallowed it. Measured 2026-07-29: 2 unresolved tasks
+    # existed while /pipeline/health and the admin Data Health page both showed
+    # "total_alerts: 0". A failure here must be visible, not silent.
     normalizer_alerts = {}
     try:
         import httpx
+        base = os.environ.get(
+            "NORMALIZER_BASE_URL", "https://normalize.databook.nyc")
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(
-                "https://normalize.databook.nyc/tasks"
-            )
+            resp = await client.get(f"{base.rstrip('/')}/tasks")
             if resp.status_code == 200:
-                tasks = resp.json()
+                payload = resp.json()
+                tasks = (payload.get('tasks', [])
+                         if isinstance(payload, dict) else payload)
                 for t in tasks:
+                    if not isinstance(t, dict):
+                        continue
                     ds_id = t.get('dataset_id')
                     if ds_id and not t.get('resolved'):
                         normalizer_alerts[ds_id] = (
                             normalizer_alerts.get(ds_id, 0) + 1
                         )
-    except Exception:
-        pass  # Normalizer may be down
+            else:
+                print(f"[health] normalizer /tasks returned "
+                      f"{resp.status_code}; alert counts unavailable")
+    except Exception as e:
+        # Normalizer may genuinely be down — but say so rather than reporting 0
+        # unresolved tasks as though that were a measurement.
+        print(f"[health] normalizer /tasks unreachable ({type(e).__name__}: "
+              f"{e}); alert counts unavailable")
 
     for row in rows:
         tn = row.get('table_name', '')

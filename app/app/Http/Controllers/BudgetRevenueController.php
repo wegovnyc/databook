@@ -44,4 +44,36 @@ class BudgetRevenueController extends Controller
             'agencies' => $agencies,
         ]);
     }
+
+    public function payroll(Request $request)
+    {
+        $fy = $request->input('fiscal_year');
+        $summary = DatabookAPI::reqOCE('/oce/payroll/summary', 60)
+            ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [],
+                'by_agency' => [], 'by_title' => [], 'by_payroll_type' => []];
+        $agenciesUrl = '/oce/payroll/agencies?limit=50' . ($fy ? "&fiscal_year={$fy}" : '');
+        $agencies = DatabookAPI::reqOCE($agenciesUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0];
+
+        // Title-level record explorer (agency/title/payroll_type rollup rows).
+        $q      = trim((string) $request->input('q', ''));
+        $agency = trim((string) $request->input('agency', ''));
+        $sort   = $request->input('sort', 'gross');
+        $order  = $request->input('order', 'desc') === 'asc' ? 'asc' : 'desc';
+        $page   = max(1, (int) $request->input('page', 1));
+        $recUrl = '/oce/payroll/records?limit=25&page=' . $page
+            . '&sort=' . urlencode($sort) . '&order=' . $order
+            . ($fy ? '&fiscal_year=' . $fy : '')
+            . ($q !== '' ? '&q=' . urlencode($q) : '')
+            . ($agency !== '' ? '&agency=' . urlencode($agency) : '');
+        $records = DatabookAPI::reqOCE($recUrl, 60)
+            ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1];
+
+        return view('procurement.payroll', [
+            'pagetitle' => 'Payroll - Procurement - Databook',
+            'summary' => $summary,
+            'agencies' => $agencies,
+            'records' => $records,
+            'recFilters' => ['q' => $q, 'agency' => $agency, 'fiscal_year' => $fy, 'sort' => $sort, 'order' => $order],
+        ]);
+    }
 }

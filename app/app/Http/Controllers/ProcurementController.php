@@ -90,7 +90,13 @@ class ProcurementController extends Controller
             'pagetitle' => ($data['vendor']['name'] ?? 'Vendor') . " - Procurement",
             'vendor' => $data['vendor'],
             'contracts' => $data['contracts'] ?? [],
+            'spend' => $data['spend'] ?? null,   // Checkbook actuals across this vendor's contracts
+            'sbs' => $data['sbs'] ?? null,       // SBS certified-business profile (null when unmatched)
+            'passport' => $data['passport'] ?? null, // PASSPort sub-tables: ownership, MOCS ratings, entity record
+            'doingBusiness' => $data['doing_business'] ?? null, // MOCS Doing Business Database (LL34)
+            'dos' => $data['dos'] ?? null,        // NY DOS legal-entity record (null when unmatched)
             'relatedNotices' => $data['related_notices'] ?? [],
+            'nycha' => $data['nycha'] ?? null,
             'breadcrumbs' => Breadcrumbs::procurementVendor($id, $data['vendor']['name'] ?? 'Vendor')
         ]);
     }
@@ -199,6 +205,8 @@ class ProcurementController extends Controller
             'relatedNotices' => $data['related_notices'] ?? [],
             'spendTimeline' => $data['spend_timeline'] ?? ['labels' => [], 'values' => []],
             'spendVendors' => $data['spend_vendors'] ?? [],
+            'evaluations' => $data['evaluations'] ?? [],           // MOCS agency ratings for this contract
+            'evaluationsAsOf' => $data['evaluations_as_of'] ?? '',
             'breadcrumbs' => Breadcrumbs::procurementContract($id, $data['contract']['contract_id'] ?? 'Contract')
         ]);
     }

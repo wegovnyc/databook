@@ -12,6 +12,12 @@
         <h1>Vendors</h1>
         <p class="db-page-lead">Search and filter vendors doing business with New York City.</p>
 
+        {{-- NYCHA is a separate authority (PASSPort-keyed City vendors don't include
+             NYCHA-only vendors); point people to the dedicated NYCHA directory. --}}
+        <x-db.alert tone="info" class="mb-3">
+            Looking for NYC Housing Authority vendors? NYCHA is a separate authority with its own vendor base — see the <a href="{{ route('orgSection', ['id' => '170020034', 'orgslug' => '170020034-nyc-housing-authority', 'section' => 'procurement-nycha-vendors']) }}">NYCHA vendor directory</a>.
+        </x-db.alert>
+
         {{-- Filter bar --}}
         <form action="{{ route('procurement.vendors') }}" method="GET" class="db-filter-bar mt-3 mb-4">
             <div class="db-search">

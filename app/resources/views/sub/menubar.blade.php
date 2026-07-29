@@ -89,6 +89,7 @@
                 ['Transactions',  route('procurement.transactions'),  Request::is('procurement/transaction*')],
                 ['Budget',        route('procurement.budget'),        Request::is('procurement/budget*')],
                 ['Revenue',       route('procurement.revenue'),       Request::is('procurement/revenue*')],
+                ['Payroll',       route('procurement.payroll'),       Request::is('procurement/payroll*')],
                 ['NYCHA',         route('procurement.nycha'),         Request::is('procurement/nycha*')],
                 ['Agencies',      route('procurement.agencies'),      Request::is('procurement/agencies*') || Request::is('procurement/agency*')],
                 // Orange = Analysis product (analyst/AI-enriched, not raw official data).

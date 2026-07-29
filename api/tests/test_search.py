@@ -143,3 +143,23 @@ async def test_ensure_search_indexes_survives_a_failing_index():
                 raise Exception("boom")
 
     await main._ensure_search_indexes(FlakyDB(), "wegov_orgs")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_nycha_vendors_group_links(client, mock_db, monkeypatch):
+    """NYCHA vendor search: matched → City profile, unmatched → NYCHA-native profile."""
+    def fake(term, limit=8):
+        return [
+            {"vendor": "ADAMS EUROPEAN CONTRACTING INC.", "contracts": 10, "current": 1.0, "vendor_id": None},
+            {"vendor": "MICROSOFT CORP", "contracts": 2, "current": 2.0, "vendor_id": "1632138"},
+        ]
+    monkeypatch.setattr("routers.nycha.search_vendors", fake)
+    r = await client.get("/get/search?q=contract&type=nycha_vendors")
+    grp = [g for g in r.json()["groups"] if g["type"] == "nycha_vendors"]
+    assert grp, "nycha_vendors group missing"
+    res = grp[0]["results"]
+    adams = next(x for x in res if x["title"].startswith("ADAMS"))
+    assert "/procurement-nycha-vendor?name=" in adams["url"] and "ADAMS" in adams["url"]
+    assert "10 contracts" in adams["meta"]
+    ms = next(x for x in res if x["title"].startswith("MICROSOFT"))
+    assert ms["url"] == "/procurement/vendor/1632138"

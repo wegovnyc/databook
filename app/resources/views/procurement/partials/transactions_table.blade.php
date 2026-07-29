@@ -1,13 +1,19 @@
 {{-- AJAX-loaded Related Transactions Table Partial
-     Expects: $txFilterParam (e.g. 'vendor' or 'agency') and $txFilterValue to be set --}}
+     Expects: $txFilterParam (e.g. 'vendor' or 'agency') and $txFilterValue to be set.
+     Optional: $txHeading / $txNote — the filter is NOT always "this record". On a
+     contract profile this table is filtered by VENDOR, so it shows that vendor's
+     citywide payments; callers should say so rather than implying otherwise. --}}
 <div id="section-transactions" class="db-anchor mb-5">
     <div class="d-flex justify-content-between align-items-center mb-2" style="gap: var(--db-space-2);">
         <div class="d-flex align-items-center" style="gap: var(--db-space-15);">
-            <h4 class="mb-0">Recent Transactions</h4>
+            <h4 class="mb-0">{{ $txHeading ?? 'Recent Transactions' }}</h4>
             <span id="txCount" class="db-badge db-badge-neutral">—</span>
         </div>
         @include('procurement.partials.source_badge', ['source' => 'checkbook'])
     </div>
+    @if($txNote ?? false)
+    <p class="text-muted mb-2" style="font-size: var(--db-text-sm);">{{ $txNote }}</p>
+    @endif
 
     <div class="db-table-wrap">
         <div class="table-responsive">
@@ -68,8 +74,14 @@
                 } else if (tx.contract_id) {
                     contractLink = `<a href="/procurement/contracts?q=${encodeURIComponent(tx.contract_id)}" class="text-primary">${tx.contract_id}</a>`;
                 }
+                // The API already resolves each payee to a PASSPort id (tx.vendor_id) —
+                // it was fetched on every request and rendered as dead text. Link it.
+                const payee = tx.payee_name || '—';
+                const payeeCell = tx.vendor_id
+                    ? `<a href="/procurement/vendor/${encodeURIComponent(tx.vendor_id)}">${payee}</a>`
+                    : payee;
                 return `<tr>
-                    <td class="fw-semibold">${tx.payee_name || '—'}</td>
+                    <td class="fw-semibold">${payeeCell}</td>
                     <td>${tx.agency || '—'}</td>
                     <td><small>${contractLink}</small></td>
                     <td class="db-num fw-semibold">$${amt.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>

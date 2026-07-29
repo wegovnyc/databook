@@ -8,7 +8,7 @@
 
 ## Ground truth (read these for exact values)
 
-On the same machine as databook (`<repo-root>`):
+On the same machine as databook (`/path/to/Antigravity/Databook2`):
 
 - **Tokens:** `app/public/css/databook-tokens.css` (inlined in full below)
 - **Components:** `app/public/css/databook-components.css` (~743 lines; class catalog below)
@@ -128,7 +128,7 @@ Icons are **Bootstrap Icons** (`bi-*`) — never Font Awesome (it isn't loaded).
 ## How to hand this off
 
 - **Same machine:** point the other session at this file
-  (`<repo-root>/docs/DATABOOK-STYLE.md`) plus the two CSS files above, and
+  (`/path/to/Antigravity/Databook2/docs/DATABOOK-STYLE.md`) plus the two CSS files above, and
   have it view a mockup PNG or `https://databook.nyc/styleguide`.
 - **Otherwise:** paste this file's contents; for exact component rules also paste
   `databook-components.css`. For the visual, share a screenshot of `/styleguide`.

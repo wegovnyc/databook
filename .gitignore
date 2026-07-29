@@ -31,6 +31,3 @@ app/node_modules/
 .idea/
 scripts/local-seed.sql
 /data-lake/
-
-# PHP dependencies (installed at build via composer)
-app/vendor/

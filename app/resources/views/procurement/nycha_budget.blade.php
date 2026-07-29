@@ -18,22 +18,18 @@
 @endphp
 
 @section('content')
-<div class="db-hero">
-    <div class="inner_container">
-        <div class="container db-hero-inner">
-            <div class="db-hero-copy">
-                <div class="db-eyebrow" style="color: var(--db-accent);">Procurement · NYCHA</div>
-                <h1>NYCHA Expense Budget @include('procurement.partials.source_badge', ['source' => 'checkbook'])</h1>
-                <p style="max-width: 62ch; font-size: var(--db-text-lg); line-height: 1.5; color: var(--db-text-on-navy-muted); margin: var(--db-space-2) 0 0;">How the New York City Housing Authority budgets its expense dollars — adopted vs modified vs actually spent, by responsibility center (developments &amp; functional units) and expense category. A separate, largely federally-funded authority. Sourced from <a href="https://www.checkbooknyc.com" target="_blank" rel="noopener" style="color: var(--db-on-dark-accent);">Checkbook NYC</a>.</p>
-            </div>
-        </div>
+@include('sub.orgheader', ['active' => $section])
+<div class="inner_container">
+    <div class="container" style="padding-top: var(--db-space-4); padding-bottom: 0;">
+        <div class="db-eyebrow">Procurement · NYCHA</div>
+        <h1 style="margin: 0 0 var(--db-space-2);">Expense Budget @include('procurement.partials.source_badge', ['source' => 'checkbook'])</h1>
+        <p class="db-page-lead" style="max-width: 68ch;">How the New York City Housing Authority budgets its expense dollars — adopted vs modified vs actually spent, by responsibility center (developments &amp; functional units) and expense category. Sourced from <a href="https://www.checkbooknyc.com" target="_blank" rel="noopener">Checkbook NYC</a>.</p>
     </div>
 </div>
 
 <div class="inner_container">
     <div class="container" style="padding-top: var(--db-space-5); padding-bottom: var(--db-space-8);">
 
-        @include('procurement.partials.nycha_tabs')
 
         @if(!$available)
         <div class="db-empty" style="margin-top: var(--db-space-4);">
@@ -137,6 +133,33 @@
                 </table>
             </div>
         </div>
+
+        @php $bFyOpts = array_values(array_filter(array_map(fn($y) => $y['year'] ?? null, $summary['by_year'] ?? []))); rsort($bFyOpts); @endphp
+        @include('procurement.partials.nycha_record_table', [
+            'recTitle' => 'Budget lines',
+            'recNoun'  => 'line',
+            'recExportPath' => '/oce/nycha/budget/records/export',
+            'recSearchPlaceholder' => 'Responsibility center, category, funding source…',
+            'recFyOpts' => $bFyOpts,
+            'recSorts' => ['modified' => 'Modified', 'committed' => 'Committed', 'actual' => 'Actual spend', 'adopted' => 'Adopted', 'unit' => 'Responsibility center'],
+            'recCols' => [
+                ['label' => 'Responsibility center', 'key' => 'responsibility_center'],
+                ['label' => 'Expense category', 'key' => 'expense_category'],
+                ['label' => 'Funding source', 'key' => 'funding_source'],
+                ['label' => 'Modified', 'key' => 'modified', 'money' => true],
+                ['label' => 'Committed', 'key' => 'committed', 'money' => true],
+                ['label' => 'Spent', 'key' => 'actual', 'money' => true],
+            ],
+            'recDetail' => [
+                ['label' => 'Fiscal year', 'key' => 'year'],
+                ['label' => 'Budget type', 'key' => 'budget_type'],
+                ['label' => 'Budget name', 'key' => 'budget_name'],
+                ['label' => 'Program', 'key' => 'program'],
+                ['label' => 'Project', 'key' => 'project'],
+                ['label' => 'Adopted', 'key' => 'adopted', 'money' => true],
+                ['label' => 'Remaining', 'key' => 'remaining', 'money' => true],
+            ],
+        ])
 
         @endif
     </div>

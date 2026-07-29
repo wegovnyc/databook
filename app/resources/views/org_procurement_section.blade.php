@@ -25,11 +25,22 @@
 <div class="inner_container">
     <div class="container" style="padding-top: var(--db-space-3); padding-bottom: var(--db-space-5);">
 
-        <div class="db-eyebrow">Procurement</div>
-        <h1>{{ $org['name'] }}</h1>
-        <p class="db-page-lead">Procurement overview — contracts, solicitations, vendors, and spending.</p>
-
-        @include('procurement.partials.agency_body')
+        @if($isNycha ?? false)
+            {{-- NYCHA: separate authority — Finances & Procurement unified here.
+                 Tabs = sub-nav (Finances Overview + the four NYCHA domains +
+                 Council Funding); flag explains the difference; cards deep-link
+                 into each domain (all org-profile URLs). --}}
+            <div class="db-eyebrow">Finances &amp; Procurement</div>
+            <h1>Finances Overview</h1>
+            <p class="db-page-lead">Budget, revenue, contracts, spending, and Council discretionary funding for the New York City Housing Authority.</p>
+            @include('procurement.partials.nycha_flag')
+            @include('procurement.partials.nycha_cards')
+        @else
+            <div class="db-eyebrow">Procurement</div>
+            <h1>{{ $org['name'] }}</h1>
+            <p class="db-page-lead">Procurement overview — contracts, solicitations, vendors, and spending.</p>
+            @include('procurement.partials.agency_body')
+        @endif
 
     </div>
 </div>

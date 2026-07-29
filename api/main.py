@@ -19,9 +19,11 @@ from postgrex import CsvDataset
 #from reqs import select
 #from pydantic import BaseModel
 from postgrex import PostgresModelAsync
+from modules import duckpool
 from subprocess import Popen
 from routers.oce import router as oce_router
 from routers.budget_revenue import router as budget_revenue_router
+from routers.payroll import router as payroll_router
 from routers.nycha import router as nycha_router
 from routers.data_pipeline import router as pipeline_router
 from routers.public_v1 import router as public_v1_router
@@ -106,6 +108,7 @@ app.include_router(public_v1_router)
 app.include_router(search_router)
 app.include_router(oce_router)
 app.include_router(budget_revenue_router)
+app.include_router(payroll_router)
 app.include_router(nycha_router)
 app.include_router(pipeline_router)
 
@@ -137,7 +140,13 @@ async def query_user(user_id: str):
 
 @app.on_event("startup")
 async def startup():
+    # Fully opens the pool (min_size == max_size) BEFORE traffic, so the request
+    # path never calls getaddrinfo; see modules/postgrex/asyncmodel.py.
     await PostgresModelAsync.connect()
+    print(f"[startup] Postgres pool warm: {PostgresModelAsync.pool_status()}", flush=True)
+    # DuckDB gets its OWN executor so Parquet scans can never starve DNS
+    # resolution for new Postgres connections; see modules/duckpool.py.
+    print(f"[startup] DuckDB executor: {duckpool.pool_status()}", flush=True)
     await ensure_people_indexes()
     
     # Pre-warm heavy caches in the background so first user hits are instant.
@@ -211,6 +220,7 @@ async def ensure_people_indexes():
 @app.on_event("shutdown")
 async def shutdown():
     await PostgresModelAsync.disconnect()
+    duckpool.shutdown()
 
 
 @app.get('/health', tags=['Operations'], summary='Health check for deployment verification')
@@ -306,7 +316,23 @@ async def get_organizations_full_list():
 
 @app.get('/get/orgs/profile/{id}', tags=['Organizations'])
 async def get_organization_profile(id: int):
-    return await select("SELECT org.*, p.id AS parent_id, p.name AS parent_name, p.type AS parent_type FROM wegov_orgs org LEFT JOIN wegov_orgs p ON p.airtable_id = regexp_replace(org.child_of, '[\[\]\"]', '', 'g') WHERE org.id = $1", (id,))
+    _base = "SELECT org.*, p.id AS parent_id, p.name AS parent_name, p.type AS parent_type"
+    _joins = r""" FROM wegov_orgs org LEFT JOIN wegov_orgs p ON p.airtable_id = regexp_replace(org.child_of, '[\[\]"]', '', 'g')"""
+    # Greenbook-derived agency head + fallback address (see api/enrich_agency.py).
+    # Guarded so environments that haven't built the enrichment tables yet fall
+    # back to the plain profile instead of 500ing every org page.
+    try:
+        return await select(
+            _base
+            + ", ahe.head_name AS derived_head_name, ahe.head_title AS derived_head_title"
+            + ", ahe.confidence AS derived_head_confidence"
+            + ", ace.address AS derived_address, ace.address_rows AS derived_address_rows"
+            + _joins
+            + " LEFT JOIN agency_head_enrichment ahe ON ahe.org_id = org.id"
+            + " LEFT JOIN agency_contact_enrichment ace ON ace.org_id = org.id"
+            + " WHERE org.id = $1", (id,))
+    except asyncpg.exceptions.UndefinedTableError:
+        return await select(_base + _joins + " WHERE org.id = $1", (id,))
 
 @app.get('/get/orgs/section/{id}/{tbl}', tags=['Organizations'])
 async def get_subdataset_related_to_organization(id: str, tbl: str):

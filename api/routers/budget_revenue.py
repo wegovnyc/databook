@@ -19,6 +19,8 @@ from typing import Optional
 import duckdb
 from fastapi import APIRouter, HTTPException
 
+from modules.duckpool import to_duckdb_thread
+
 router = APIRouter(prefix="/oce", tags=["budget-revenue"])
 
 # Public HTTPS base for the spending bucket (same bucket as spending). Overridable
@@ -67,11 +69,20 @@ def _available(domain: str) -> bool:
     return ok
 
 
-def _cached(key: str, fn):
+async def _cached(key: str, fn):
+    """Cache wrapper; a MISS is offloaded to the dedicated DuckDB executor.
+
+    ⚠ This used to call fn() inline, which meant a cold DuckDB scan ran ON THE
+    EVENT LOOP and stalled every other request in the process for its duration —
+    including asyncpg's socket reads and timers, which is one of the ways the
+    2026-07-27 connect TimeoutError bursts were produced. The api restarts daily
+    at 04:00 UTC (cron), so the cache is cold every morning and the first visitor
+    to each endpoint paid that stall. See modules/duckpool.py.
+    """
     hit = _CACHE.get(key)
     if hit and (time.time() - hit["ts"]) < _CACHE_TTL:
         return hit["data"]
-    data = fn()
+    data = await to_duckdb_thread(fn)
     _CACHE[key] = {"data": data, "ts": time.time()}
     return data
 
@@ -171,7 +182,7 @@ async def budget_summary():
     if not _available("budget"):
         return _BUDGET_EMPTY
     try:
-        return _cached("budget:summary", lambda: _run(_query_budget_summary))
+        return await _cached("budget:summary", _query_budget_summary)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Budget summary failed: {exc}")
 
@@ -184,8 +195,8 @@ async def budget_agencies(fiscal_year: Optional[int] = None, sort: str = "modifi
     limit = max(1, min(limit, 200))
     key = f"budget:agencies:{fiscal_year}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _run(
-            lambda: _query_budget_agencies(fiscal_year, sort, order, page, limit)))
+        return await _cached(
+            key, lambda: _query_budget_agencies(fiscal_year, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Budget agencies failed: {exc}")
 
@@ -297,7 +308,7 @@ async def revenue_summary():
     if not _available("revenue"):
         return {"available": False, "latest_year": None, "totals": {}, "by_year": [], "by_category": []}
     try:
-        return _cached("revenue:summary", lambda: _run(_query_revenue_summary))
+        return await _cached("revenue:summary", _query_revenue_summary)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Revenue summary failed: {exc}")
 
@@ -310,13 +321,7 @@ async def revenue_agencies(fiscal_year: Optional[int] = None, sort: str = "recog
     limit = max(1, min(limit, 200))
     key = f"revenue:agencies:{fiscal_year}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _run(
-            lambda: _query_revenue_agencies(fiscal_year, sort, order, page, limit)))
+        return await _cached(
+            key, lambda: _query_revenue_agencies(fiscal_year, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Revenue agencies failed: {exc}")
-
-
-def _run(fn):
-    """Run a blocking DuckDB query fn. (Kept simple + sync; datasets are small and
-    the endpoints are cached daily.)"""
-    return fn()

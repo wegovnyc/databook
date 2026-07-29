@@ -18,22 +18,18 @@
 @endphp
 
 @section('content')
-<div class="db-hero">
-    <div class="inner_container">
-        <div class="container db-hero-inner">
-            <div class="db-hero-copy">
-                <div class="db-eyebrow" style="color: var(--db-accent);">Procurement · NYCHA</div>
-                <h1>NYCHA Revenue @include('procurement.partials.source_badge', ['source' => 'checkbook'])</h1>
-                <p style="max-width: 62ch; font-size: var(--db-text-lg); line-height: 1.5; color: var(--db-text-on-navy-muted); margin: var(--db-space-2) 0 0;">Revenue the New York City Housing Authority recognizes — adopted vs modified vs recognized, by funding source and revenue category. Dominated by federal operating subsidies (Section 8 / vouchers) rather than City tax revenue. Sourced from <a href="https://www.checkbooknyc.com" target="_blank" rel="noopener" style="color: var(--db-on-dark-accent);">Checkbook NYC</a>.</p>
-            </div>
-        </div>
+@include('sub.orgheader', ['active' => $section])
+<div class="inner_container">
+    <div class="container" style="padding-top: var(--db-space-4); padding-bottom: 0;">
+        <div class="db-eyebrow">Procurement · NYCHA</div>
+        <h1 style="margin: 0 0 var(--db-space-2);">Revenue @include('procurement.partials.source_badge', ['source' => 'checkbook'])</h1>
+        <p class="db-page-lead" style="max-width: 68ch;">Revenue the New York City Housing Authority recognizes — adopted vs modified vs recognized, by funding source and revenue category. Dominated by federal operating subsidies (Section 8 / vouchers) rather than City tax revenue. Sourced from <a href="https://www.checkbooknyc.com" target="_blank" rel="noopener">Checkbook NYC</a>.</p>
     </div>
 </div>
 
 <div class="inner_container">
     <div class="container" style="padding-top: var(--db-space-5); padding-bottom: var(--db-space-8);">
 
-        @include('procurement.partials.nycha_tabs')
 
         @if(!$available)
         <div class="db-empty" style="margin-top: var(--db-space-4);">
@@ -134,6 +130,32 @@
                 </table>
             </div>
         </div>
+
+        @php $vFyOpts = array_values(array_filter(array_map(fn($y) => $y['year'] ?? null, $summary['by_year'] ?? []))); rsort($vFyOpts); @endphp
+        @include('procurement.partials.nycha_record_table', [
+            'recTitle' => 'Revenue lines',
+            'recNoun'  => 'line',
+            'recExportPath' => '/oce/nycha/revenue/records/export',
+            'recSearchPlaceholder' => 'Revenue category, funding source, budget name…',
+            'recFyOpts' => $vFyOpts,
+            'recSorts' => ['recognized' => 'Recognized', 'modified' => 'Modified', 'adopted' => 'Adopted', 'category' => 'Revenue category'],
+            'recCols' => [
+                ['label' => 'Revenue category', 'key' => 'revenue_category'],
+                ['label' => 'Funding source', 'key' => 'funding_source'],
+                ['label' => 'Adopted', 'key' => 'adopted', 'money' => true],
+                ['label' => 'Modified', 'key' => 'modified', 'money' => true],
+                ['label' => 'Recognized', 'key' => 'recognized', 'money' => true],
+            ],
+            'recDetail' => [
+                ['label' => 'Fiscal year', 'key' => 'year'],
+                ['label' => 'Revenue class', 'key' => 'revenue_class'],
+                ['label' => 'Revenue/expense category', 'key' => 'revenue_expense_category'],
+                ['label' => 'Budget name', 'key' => 'budget_name'],
+                ['label' => 'Budget type', 'key' => 'budget_type'],
+                ['label' => 'Responsibility center', 'key' => 'responsibility_center'],
+                ['label' => 'Remaining', 'key' => 'remaining', 'money' => true],
+            ],
+        ])
 
         @endif
     </div>

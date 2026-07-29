@@ -46,7 +46,7 @@ class Organizations extends Controller
 			'globStats' => DatabookAPI::reqOCE('/pipeline/globstats') ?: json_decode(file_get_contents(public_path('data/globStats.json')), true),
 			####### seo ########
 			'pagetitle' => "NYC DataBook - Open Data Application for New York City Government Transparency",
-			'articles' => (new \App\Services\StrapiService())->getLatestArticles(3, 'Databook'),
+			'articles' => (new \App\Services\PayloadService())->getLatestArticles(3, 'Databook'),
 		]);
 	}
 
@@ -154,9 +154,30 @@ class Organizations extends Controller
 	 * @param  int  $id
 	 * @return \Illuminate\View\View
 	 */
+	/**
+	 * Fetch an org profile, distinguishing a transient API outage from a genuine
+	 * not-found. DatabookAPI::req() returns `false` when the API is unreachable
+	 * (e.g. mid-deploy restart) and `[]` when the API is up but the org doesn't
+	 * exist. On a transient failure we retry once, then return a 503 (retryable,
+	 * auto-refreshing) instead of a hard, cacheable 404. Returns the org row, or
+	 * null when the org genuinely isn't found (caller aborts 404).
+	 */
+	protected function fetchOrg($id)
+	{
+		$rows = DatabookAPI::req("/get/orgs/profile/{$id}");
+		if ($rows === false) {
+			usleep(500000); // ride out a micro-blip before giving up
+			$rows = DatabookAPI::req("/get/orgs/profile/{$id}");
+		}
+		if ($rows === false) {
+			abort(response()->view('errors.service-unavailable', [], 503, ['Retry-After' => '5']));
+		}
+		return $rows[0] ?? null;
+	}
+
 	public function orgAbout($id, $orgslug = '')
 	{
-		$org = DatabookAPI::req("/get/orgs/profile/{$id}")[0] ?? null;
+		$org = $this->fetchOrg($id);
 		if (!$org)
 			return abort(404);
 		if (preg_match('~Union|Bargaining Unit~si', $org['type']))
@@ -218,7 +239,7 @@ class Organizations extends Controller
 	 */
 	public function orgSection($id, $orgslug = null, $section = null)
 	{
-		$org = DatabookAPI::req("/get/orgs/profile/{$id}")[0] ?? null;
+		$org = $this->fetchOrg($id);
 		// Check if org exists before accessing its properties
 		if (!$org) {
 			return abort(404);
@@ -287,7 +308,174 @@ class Organizations extends Controller
 		];
 		
 		$subsection = $subsectionMap[$section] ?? 'highlights';
-		
+
+		// NYCHA is a separate public authority — its procurement lives in the
+		// dedicated /oce/nycha/* domains (Checkbook `_NYCHA` feeds), NOT the City
+		// contracts/solicitations/spending tables that the shared agency_body reads
+		// (which is why the standard tab is empty for it). Render the NYCHA hub body
+		// (explanatory flag + the four domain cards) instead.
+		$isNycha = (string) ($org['id'] ?? '') === '170020034'
+			|| stripos($org['name'] ?? '', 'housing authority') !== false;
+		if ($isNycha) {
+			$orgslug = Str::slug($org['name'], '-');
+			// Shared org-profile chrome for every NYCHA procurement page (org header
+			// + on-page NYCHA tabs). The tabs/cards build orgSection URLs from these.
+			$chrome = [
+				'id' => $id,
+				'org' => $org,
+				'section' => $section,
+				'subsection' => $subsection,
+				'orgslug' => $orgslug,
+				'slist' => $ds->list,
+				'menu' => $ds->menu,
+				'activeDropDown' => 'Procurement',
+				'icons' => $ds->socicons,
+				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], $org['name'], $section, $ds->list[$section] ?? 'Procurement'),
+				'canonicalUrl' => route('orgProfile', ['id' => $id, 'orgslug' => $orgslug]),
+			];
+			$fy = request()->input('fiscal_year');
+			$q  = $fy ? "?fiscal_year={$fy}" : '';
+			$qc = $fy ? "&fiscal_year={$fy}" : '';
+			switch ($section) {
+				case 'procurement-nycha-budget':
+					$bq = trim((string) request()->input('q', ''));
+					$bsort = request()->input('sort', 'modified');
+					$border = request()->input('order', 'desc') === 'asc' ? 'asc' : 'desc';
+					$bpage = max(1, (int) request()->input('page', 1));
+					$brecUrl = '/oce/nycha/budget/records?limit=25&page=' . $bpage
+						. '&sort=' . urlencode($bsort) . '&order=' . $border
+						. ($fy ? '&fiscal_year=' . $fy : '') . ($bq !== '' ? '&q=' . urlencode($bq) : '');
+					return view('procurement.nycha_budget', $chrome + [
+						'pagetitle' => "{$org['name']} — Expense Budget | WeGovNYC Databook",
+						'snippet' => "NYCHA expense budget — adopted, modified, committed, and actual spending.",
+						'summary' => DatabookAPI::reqOCE('/oce/nycha/budget/summary', 60) ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [], 'by_category' => []],
+						'units'   => DatabookAPI::reqOCE('/oce/nycha/budget/units' . $q, 60) ?: ['available' => false, 'data' => [], 'total' => 0],
+						'records' => DatabookAPI::reqOCE($brecUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
+						'recFilters' => ['q' => $bq, 'fiscal_year' => $fy, 'sort' => $bsort, 'order' => $border],
+					]);
+				case 'procurement-nycha-revenue':
+					$vq = trim((string) request()->input('q', ''));
+					$vsort = request()->input('sort', 'recognized');
+					$vorder = request()->input('order', 'desc') === 'asc' ? 'asc' : 'desc';
+					$vpage = max(1, (int) request()->input('page', 1));
+					$vrecUrl = '/oce/nycha/revenue/records?limit=25&page=' . $vpage
+						. '&sort=' . urlencode($vsort) . '&order=' . $vorder
+						. ($fy ? '&fiscal_year=' . $fy : '') . ($vq !== '' ? '&q=' . urlencode($vq) : '');
+					return view('procurement.nycha_revenue', $chrome + [
+						'pagetitle' => "{$org['name']} — Revenue | WeGovNYC Databook",
+						'snippet' => "NYCHA revenue — adopted, modified, and recognized by funding source.",
+						'summary' => DatabookAPI::reqOCE('/oce/nycha/revenue/summary', 60) ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [], 'by_category' => [], 'by_funding_source' => []],
+						'sources' => DatabookAPI::reqOCE('/oce/nycha/revenue/sources' . $q, 60) ?: ['available' => false, 'data' => [], 'total' => 0],
+						'records' => DatabookAPI::reqOCE($vrecUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
+						'recFilters' => ['q' => $vq, 'fiscal_year' => $fy, 'sort' => $vsort, 'order' => $vorder],
+					]);
+				case 'procurement-nycha-contracts':
+					// Record explorer: search/filter/sort/paginate individual contracts.
+					$cq    = trim((string) request()->input('q', ''));
+					$csort = request()->input('sort', 'current');
+					$corder = request()->input('order', 'desc') === 'asc' ? 'asc' : 'desc';
+					$cpage = max(1, (int) request()->input('page', 1));
+					$clim  = 25;
+					$cUrl  = '/oce/nycha/contracts?limit=' . $clim
+						. '&page=' . $cpage . '&sort=' . urlencode($csort) . '&order=' . $corder
+						. ($cq !== '' ? '&q=' . urlencode($cq) : '') . $qc;
+					return view('procurement.nycha_contracts', $chrome + [
+						'pagetitle' => "{$org['name']} — Contracts | WeGovNYC Databook",
+						'snippet' => "NYCHA contracts — original, current, and invoiced value by vendor.",
+						'summary' => DatabookAPI::reqOCE('/oce/nycha/contracts/summary', 60) ?: ['available' => false, 'totals' => [], 'by_year' => [], 'top_vendors' => []],
+						'contracts' => DatabookAPI::reqOCE($cUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
+						'filters' => ['q' => $cq, 'fiscal_year' => $fy, 'sort' => $csort, 'order' => $corder],
+					]);
+				case 'procurement-nycha-spending':
+					$ssum = DatabookAPI::reqOCE('/oce/nycha/spending/summary', 60) ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [], 'by_category' => [], 'by_funding_source' => [], 'section_8' => [], 'top_vendors' => []];
+					// Payment (record) explorer: FY-scoped (default latest) so each query
+					// prunes to one partition instead of the full 22.56M-row lake.
+					$sFy   = $fy ?: ($ssum['latest_year'] ?? null);
+					$sq    = trim((string) request()->input('q', ''));
+					$scat  = (string) request()->input('spending_category', '');
+					$ss8   = (string) request()->input('section_8', '');
+					$ssort = request()->input('sort', 'amount');
+					$sorder = request()->input('order', 'desc') === 'asc' ? 'asc' : 'desc';
+					$spage = max(1, (int) request()->input('page', 1));
+					$recUrl = '/oce/nycha/spending/records?limit=25&page=' . $spage
+						. '&sort=' . urlencode($ssort) . '&order=' . $sorder
+						. ($sFy ? '&fiscal_year=' . $sFy : '')
+						. ($sq !== '' ? '&q=' . urlencode($sq) : '')
+						. ($scat !== '' ? '&spending_category=' . urlencode($scat) : '')
+						. (in_array($ss8, ['Y', 'N'], true) ? '&section_8=' . $ss8 : '');
+					return view('procurement.nycha_spending', $chrome + [
+						'pagetitle' => "{$org['name']} — Spending | WeGovNYC Databook",
+						'snippet' => "NYCHA spending — every payment by category, funding source, and development.",
+						'summary' => $ssum,
+						'developments' => DatabookAPI::reqOCE('/oce/nycha/spending/by-development?sort=spending&limit=50' . ($sFy ? '&fiscal_year=' . $sFy : ''), 60) ?: ['available' => false, 'data' => [], 'total' => 0],
+						'records' => DatabookAPI::reqOCE($recUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
+						'recFilters' => ['q' => $sq, 'fiscal_year' => $sFy, 'spending_category' => $scat, 'section_8' => $ss8, 'sort' => $ssort, 'order' => $sorder],
+					]);
+				case 'procurement-nycha-contract':
+					// Individual NYCHA contract profile (detail + actual payments).
+					$cpId = trim((string) request()->input('id', ''));
+					if ($cpId === '') {
+						return redirect(route('orgSection', ['id' => $id, 'orgslug' => $orgslug, 'section' => 'procurement-nycha-contracts']));
+					}
+					$cp = DatabookAPI::reqOCE('/oce/nycha/contract?id=' . urlencode($cpId), 60);
+					if (!$cp || empty($cp['available'])) {
+						abort(404, 'NYCHA contract not found');
+					}
+					return view('procurement.nycha_contract_profile', $chrome + [
+						'pagetitle' => "{$cpId} — NYCHA Contract | WeGovNYC Databook",
+						'snippet' => "NYCHA contract {$cpId} — value, vendor, and actual payments (Checkbook NYC).",
+						'cp' => $cp,
+						'cid' => $cpId,
+					]);
+				case 'procurement-nycha-vendors':
+					// Directory of every NYCHA vendor. Matched vendors link to the
+					// City vendor profile; unmatched get a NYCHA-native profile.
+					$nvq = trim((string) request()->input('q', ''));
+					$nvsort = request()->input('sort', 'spending');
+					$nvorder = request()->input('order', 'desc') === 'asc' ? 'asc' : 'desc';
+					$nvpage = max(1, (int) request()->input('page', 1));
+					$nvUrl = '/oce/nycha/vendors?limit=25&page=' . $nvpage
+						. '&sort=' . urlencode($nvsort) . '&order=' . $nvorder
+						. ($nvq !== '' ? '&q=' . urlencode($nvq) : '');
+					return view('procurement.nycha_vendors', $chrome + [
+						'pagetitle' => "{$org['name']} — Vendors | WeGovNYC Databook",
+						'snippet' => "NYCHA vendors — contract and payment activity, linked to City vendor profiles where matched.",
+						'vendors' => DatabookAPI::reqOCE($nvUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
+						'filters' => ['q' => $nvq, 'sort' => $nvsort, 'order' => $nvorder],
+					]);
+				case 'procurement-nycha-vendor':
+					// NYCHA-native vendor profile (for vendors with no PASSPort record).
+					$vpName = trim((string) request()->input('name', ''));
+					if ($vpName === '') {
+						return redirect(route('orgSection', ['id' => $id, 'orgslug' => $orgslug, 'section' => 'procurement-nycha-vendors']));
+					}
+					$vp = DatabookAPI::reqOCE('/oce/nycha/vendor?name=' . urlencode($vpName), 60);
+					// Crosswalked vendors have a richer City profile (which now shows
+					// NYCHA activity) — send them there instead of the NYCHA-native page.
+					if ($vp && !empty($vp['vendor_id'])) {
+						return redirect(route('procurement.vendor', ['id' => $vp['vendor_id']]));
+					}
+					return view('procurement.nycha_vendor_profile', $chrome + [
+						'pagetitle' => "{$vpName} — NYCHA Vendor | WeGovNYC Databook",
+						'snippet' => "NYCHA vendor {$vpName} — contracts and spending (Checkbook NYC).",
+						'vp' => $vp ?: ['available' => false, 'contract_list' => [], 'contracts' => null, 'spending' => null],
+						'vname' => $vpName,
+					]);
+				default: // procurement-highlights (and any other procurement-* for NYCHA) → finances overview
+					$councilStat = DatabookAPI::req('/get/orgs/stats-reg/' . $id . '/nyccouncildiscretionaryfunding');
+					return view('org_procurement_section', $chrome + [
+						'isNycha' => true,
+						'pagetitle' => "{$org['name']} Finances & Procurement | WeGovNYC Databook",
+						'snippet' => "NYCHA finances & procurement — budget, revenue, contracts, spending (Checkbook NYC), and Council discretionary funding.",
+						'budget'    => DatabookAPI::reqOCE('/oce/nycha/budget/summary', 30)    ?: ['available' => false, 'totals' => []],
+						'revenue'   => DatabookAPI::reqOCE('/oce/nycha/revenue/summary', 30)   ?: ['available' => false, 'totals' => []],
+						'contracts' => DatabookAPI::reqOCE('/oce/nycha/contracts/summary', 30) ?: ['available' => false, 'totals' => []],
+						'spending'  => DatabookAPI::reqOCE('/oce/nycha/spending/summary', 30)  ?: ['available' => false, 'totals' => []],
+						'councilCount' => (int) ($councilStat[0]['count'] ?? 0),
+					]);
+			}
+		}
+
 		// Fetch procurement data from OCE API (cached 24h — data refreshes daily)
 		$cacheKey = "org_procurement_" . md5($org['name']);
 		$data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 86400, function () use ($org) {
@@ -366,7 +554,7 @@ class Organizations extends Controller
 	public function orgProjectSection($id, $orgslug = '')
 	{
 		$section = 'projects';
-		$org = DatabookAPI::req("/get/orgs/profile/{$id}")[0] ?? null;
+		$org = $this->fetchOrg($id);
 		$ds = new OrgsDatasets();
 		$details = $ds->get($section);
 		return $org && $details
@@ -432,7 +620,7 @@ class Organizations extends Controller
 			}
 			
 			$id = $data['id'];
-			$org = DatabookAPI::req("/get/orgs/profile/{$id}")[0] ?? null;
+			$org = $this->fetchOrg($id);
 			return $org && $details
 				? view('orgproject', [
 					'id' => $id,
@@ -470,7 +658,7 @@ class Organizations extends Controller
 				: abort(404);
 		} else {
 			$orgId = $prj[0]['wegov-org-id'] ?? null;
-			$org = $orgId ? (DatabookAPI::req("/get/orgs/profile/{$orgId}")[0] ?? null) : null;
+			$org = $orgId ? ($this->fetchOrg($orgId)) : null;
 			return $org
 				? view('pureproject', [
 					'id' => $orgId,
@@ -518,7 +706,7 @@ class Organizations extends Controller
 				DatabookAPI::req("/get/capitalprojects/milestones/{$prjId}")
 			);
 			$id = $data['id'];
-			$org = DatabookAPI::req("/get/orgs/profile/{$id}")[0] ?? null;
+			$org = $this->fetchOrg($id);
 			#var_dump($data['items']);
 			return $org && $details
 				? view('orgprojectA', [
@@ -552,7 +740,7 @@ class Organizations extends Controller
 				: abort(404);
 		} else {
 			$prj = DatabookAPI::req("/get/capitalprojects/core/{$prjId}");
-			$org = DatabookAPI::req("/get/orgs/profile/{$prj[0]['wegov-org-id']}")[0] ?? null;
+			$org = $this->fetchOrg($prj[0]['wegov-org-id']);
 			return $prj && $org
 				? view('pureproject', [
 					'id' => $prj[0]['wegov-org-id'],

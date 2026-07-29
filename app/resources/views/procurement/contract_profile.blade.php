@@ -33,7 +33,26 @@
         </div>
 
         {{-- Key highlights: registered award vs actual spending --}}
-        @php $pctUsed = $contract['pct_used'] ?? null; @endphp
+        @php
+            $pctUsed = $contract['pct_used'] ?? null;
+            // MOCS end-of-period performance ratings for this contract (27.7% of
+            // contracts have at least one). Adverse ratings are surfaced in the
+            // TOC badge so a Poor rating is visible without scrolling.
+            $evals = $evaluations ?? [];
+            $evalAdverse = count(array_filter($evals, function ($e) {
+                return in_array($e['rating'] ?? '', ['Poor', 'Unsatisfactory'], true);
+            }));
+            $evalRatingClass = [
+                'Excellent'      => 'db-badge-success',
+                'Good'           => 'db-badge-success',
+                'Satisfactory'   => 'db-badge-neutral',
+                'Poor'           => 'db-badge-warning',
+                'Unsatisfactory' => 'db-badge-danger',
+            ];
+            // Blade will not compile an @if glued to a word char — precompute.
+            $evalAsOfLabel = ($evaluationsAsOf ?? '')
+                ? 'MOCS · as of ' . $evaluationsAsOf : 'MOCS';
+        @endphp
         <div class="db-stat-grid mt-3 mb-4">
             <div class="db-stat is-accent">
                 <div class="db-stat-label">Award amount @include('procurement.partials.source_badge', ['source' => 'mocs'])</div>
@@ -58,7 +77,39 @@
             <div class="db-stat">
                 <div class="db-stat-label">Contract term</div>
                 <div class="db-stat-value" style="font-size: var(--db-text-md);">{{ $contract['start_date'] ?? 'N/A' }} → {{ $contract['end_date'] ?? 'N/A' }}</div>
+                @php
+                    // The payment WINDOW vs the contract TERM. Both dates were already
+                    // computed by the spend join and thrown away by this template.
+                    $pFirst = $contract['first_payment'] ?? null; $pLast = $contract['last_payment'] ?? null;
+                @endphp
+                @if($pFirst || $pLast)
+                <div class="db-stat-sub">paid {{ substr($pFirst ?? '', 0, 10) ?: '?' }} → {{ substr($pLast ?? '', 0, 10) ?: '?' }}</div>
+                @endif
             </div>
+            @php
+                // Award growth: `current_amount` is the registered-to-date value and can
+                // exceed the original award (modifications/renewals). It was fetched on
+                // every request and never shown.
+                // NOTE: show it whenever it differs from the award — INCLUDING when
+                // award_amount is 0, which happens in the real data (e.g. ctr 5604825:
+                // award $0, current $113k, $651k actually paid). Gating on award > 0
+                // would hide the only value the record actually has. The % comparison
+                // is what needs a non-zero award, not the tile.
+                $awardAmt = (float) ($contract['award_amount'] ?? 0);
+                $currAmt  = (float) ($contract['current_amount'] ?? 0);
+                $showCurr = $currAmt > 0 && abs($currAmt - $awardAmt) > 0.5;
+            @endphp
+            @if($showCurr)
+            <div class="db-stat">
+                <div class="db-stat-label">Current value @include('procurement.partials.source_badge', ['source' => 'mocs'])</div>
+                <div class="db-stat-value">${{ number_format($currAmt) }}</div>
+                @if($awardAmt > 0)
+                <div class="db-stat-sub">{{ $currAmt > $awardAmt ? '+' : '' }}{{ number_format(($currAmt - $awardAmt) / $awardAmt * 100, 1) }}% vs original award</div>
+                @else
+                <div class="db-stat-sub">registered value (no original award on record)</div>
+                @endif
+            </div>
+            @endif
         </div>
 
         <div class="row">
@@ -68,6 +119,7 @@
                     <div class="db-toc-title">Contents</div>
                     <a class="is-active" href="#details">Details</a>
                     @if(!empty($spendTimeline['labels']) || count($spendVendors ?? []))<a href="#spending">Spending</a>@endif
+                    @if(count($evaluations ?? []))<a href="#section-ratings">Performance Rating <span class="db-badge {{ $evalAdverse ? 'db-badge-danger' : 'db-badge-neutral' }}">{{ count($evaluations) }}</span></a>@endif
                     @if($vendor)<a href="#vendor">Vendor</a>@endif
                     @if($solicitation)<a href="#solicitation">Solicitation</a>@endif
                     <a href="#section-transactions">Transactions</a>
@@ -82,7 +134,20 @@
                     <div class="db-card"><div class="db-card-body">
                         <dl class="db-meta-list">
                             <dt>Agency</dt>
-                            <dd>{{ $contract['agency'] ?? 'N/A' }}</dd>
+                            @php
+                                // The linked solicitation carries wegov-org-id, so the agency
+                                // can point at its canonical org profile instead of being
+                                // dead text. Falls back to plain text when unmatched.
+                                $agencyOrgId = $solicitation['wegov-org-id'] ?? null;
+                                $agencyName  = $contract['agency'] ?? 'N/A';
+                            @endphp
+                            <dd>
+                                @if($agencyOrgId)
+                                <a href="{{ route('orgProfile', ['id' => $agencyOrgId, 'orgslug' => \Illuminate\Support\Str::slug($agencyName, '-')]) }}">{{ $agencyName }}</a>
+                                @else
+                                {{ $agencyName }}
+                                @endif
+                            </dd>
 
                             <dt>Vendor</dt>
                             <dd>
@@ -159,6 +224,44 @@
                 </div>
                 @endif
 
+                {{-- MOCS performance rating for THIS contract — the contracting
+                     agency's own assessment at the close of an evaluation period.
+                     A contract can have several (one per period). --}}
+                @if(count($evals))
+                <div id="section-ratings" class="db-anchor mb-5">
+                    <div class="d-flex align-items-center flex-wrap mb-3" style="gap: var(--db-space-15);">
+                        <h4 class="mb-0">Performance Rating</h4>
+                        <span class="db-badge db-badge-neutral">{{ $evalAsOfLabel }}</span>
+                        @if($evalAdverse)
+                        <span class="db-badge db-badge-danger">{{ $evalAdverse }} adverse</span>
+                        @endif
+                    </div>
+                    <div class="db-table-wrap">
+                        <div class="table-responsive">
+                            <table class="db-table">
+                                <thead><tr><th>Evaluated</th><th>Agency</th><th>Period</th><th>Rating</th></tr></thead>
+                                <tbody>
+                                    @foreach($evals as $e)
+                                    @php
+                                        $ps = $e['period_start'] ?: '';
+                                        $pe = $e['period_end'] ?: '';
+                                        $period = trim($ps . (($ps && $pe) ? ' – ' : '') . $pe);
+                                    @endphp
+                                    <tr>
+                                        <td class="text-muted">{{ $e['date'] ?: '—' }}</td>
+                                        <td>{{ $e['agency'] ?: '—' }}</td>
+                                        <td class="text-muted" style="font-size: var(--db-text-sm);">{{ $period ?: '—' }}</td>
+                                        <td><span class="db-badge {{ $evalRatingClass[$e['rating']] ?? 'db-badge-neutral' }}">{{ $e['rating'] ?: '—' }}</span></td>
+                                    </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <p class="text-muted mt-2" style="font-size: var(--db-text-sm);">Assigned by the contracting agency and published by the Mayor's Office of Contract Services.</p>
+                </div>
+                @endif
+
                 @if($vendor)
                 <div id="vendor" class="db-anchor mb-5">
                     <div class="d-flex justify-content-between align-items-center mb-3">
@@ -202,7 +305,15 @@
                 </div>
                 @endif
 
-                @include('procurement.partials.transactions_table', ['txFilterParam' => 'vendor', 'txFilterValue' => $contract['vendor_name'] ?? ($vendor['Vendor Name'] ?? '')])
+                @include('procurement.partials.transactions_table', [
+                    'txFilterParam' => 'vendor',
+                    'txFilterValue' => $contract['vendor_name'] ?? ($vendor['Vendor Name'] ?? ''),
+                    // Filtered by vendor, not by this contract — label it honestly.
+                    // This contract's own payments are the timeline + payee table above.
+                    'txHeading' => 'Recent payments to this vendor',
+                    'txNote' => 'All Checkbook payments to ' . ($contract['vendor_name'] ?? 'this vendor')
+                        . ' citywide — not limited to this contract. This contract\'s own payments are charted above.',
+                ])
 
                 @include('procurement.partials.related_notices')
 

@@ -44,7 +44,69 @@ sentry_checkin(){   # $1 = in_progress|ok|error
   curl -s -m 20 -o /dev/null -X POST "https://$host/api/$proj/cron/$mon/$key/" \
     -H "Content-Type: application/json" -d "$body" 2>/dev/null || true
 }
-fail(){ log "FAILED ($MODE): $*"; sentry_checkin error; exit 1; }
+# --- Sentry ERROR EVENT — belt-and-braces alerting ------------------------------
+# WHY THIS EXISTS (measured 2026-07-27): the cron check-in above can be silently
+# DISCARDED. Sentry accepts the POST and returns success, but if the monitor is
+# `disabled` (org cron-monitor quota) the check-in is never recorded. Verified:
+# monitors `oce-refresh-weekly`, `oce-refresh-nycha-weekly` and
+# `payroll-refresh-selftest` all existed with the correct upserted config yet had
+# status=disabled and ZERO recorded check-ins — so when BOTH weekly refreshes
+# failed on 2026-07-26 (CheckbookNYC WAF-blocked the box), nothing alerted.
+#
+# An ordinary error EVENT does not depend on cron monitors at all: it uses the
+# error quota, lands in the databook-api issue stream, and therefore shows up in
+# the daily Sentry digest. Fixed fingerprint so repeat failures group into one
+# issue instead of spamming a new one each week.
+sentry_event(){   # $1 = message
+  [ -n "${SENTRY_DSN:-}" ] || return 0
+  local key host proj body
+  key=$(echo "$SENTRY_DSN"  | sed -E "s|https://([^@]+)@.*|\1|")
+  host=$(echo "$SENTRY_DSN" | sed -E "s|https://[^@]+@([^/]+)/.*|\1|")
+  proj=$(echo "$SENTRY_DSN" | sed -E "s|.*/([0-9]+)$|\1|")
+  body=$(python3 - "oce-refresh-nycha" "${MODE:-}" "$1" <<'PYEOF'
+import datetime, json, sys, uuid
+job, mode, msg = sys.argv[1], sys.argv[2], sys.argv[3]
+print(json.dumps({
+    "event_id": uuid.uuid4().hex,
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "platform": "other",
+    "level": "error",
+    "logger": job,
+    "environment": "production",
+    "server_name": "databook-prod",
+    "transaction": f"scripts/{job}.sh",
+    "fingerprint": [f"{job}-failure"],
+    "message": {"formatted": f"{job} ({mode}) FAILED: {msg}"},
+    "tags": {"job": job, "mode": mode, "alert_source": "refresh-script"},
+}))
+PYEOF
+) || return 0
+  curl -s -m 20 -o /dev/null -X POST "https://$host/api/$proj/store/" \
+    -H "Content-Type: application/json" \
+    -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_client=databook-refresh/1.0, sentry_key=$key" \
+    -d "$body" 2>/dev/null || true
+}
+# --- healthchecks.io dead-man's-switch -----------------------------------------
+# WHY, on top of Sentry: Sentry Crons monitors sit DISABLED at the org's cron quota
+# and a disabled monitor SILENTLY DISCARDS check-ins (measured 2026-07-27: 0
+# check-ins ever recorded across 4 monitors, despite every POST returning 202). So
+# "this job never ran at all" was detected by nothing. Healthchecks covers exactly
+# that on its free tier, and unlike Sentry Crons it retains the ping BODY — so we
+# send the tail of this log and the alert arrives WITH the reason. Sentry keeps the
+# error-event path (sentry_event) for the "ran and failed" case.
+# URL comes from $ROOT/.env (gitignored); unset -> silently skipped.
+HC_URL="${HC_URL_NYCHA_REFRESH:-}"
+hc_ping(){   # $1 = start | success | fail
+  [ -n "$HC_URL" ] || return 0
+  local u="$HC_URL"
+  case "$1" in start) u="$u/start" ;; fail) u="$u/fail" ;; esac
+  if [ "$1" = start ]; then
+    curl -fsS -m 15 -o /dev/null "$u" 2>/dev/null || true
+  else
+    tail -n 40 "$LOG" 2>/dev/null | curl -fsS -m 20 -o /dev/null --data-binary @- "$u" 2>/dev/null || true
+  fi
+}
+fail(){ log "FAILED ($MODE): $*"; sentry_checkin error; sentry_event "$*"; hc_ping fail; exit 1; }
 
 case "$MODE" in weekly) ;; *) fail "usage: oce-refresh-nycha.sh weekly" ;; esac
 command -v docker >/dev/null || fail "docker not found"
@@ -52,6 +114,7 @@ command -v docker >/dev/null || fail "docker not found"
 
 CHECKIN=$(python3 -c "import uuid;print(uuid.uuid4().hex)" 2>/dev/null || echo "")
 sentry_checkin in_progress
+hc_ping start
 
 # --- target fiscal years -------------------------------------------------------
 read CLOCK_FY NEWEST <<EOF
@@ -148,9 +211,16 @@ for D in nycha_budget nycha_revenue nycha_contracts; do
   [ -f "$live" ] && mv "$live" "$live.bak"
   mkdir -p "$DATA/$D"; mv "$BUILD/$D/$D.parquet" "$live" || log "swap $D failed"
 done
+# Rollback copies of spending partitions MUST live OUTSIDE the partitioned tree:
+# a sibling "fiscal_year=$FY.bak" dir matches the reader's fiscal_year=* glob and
+# hive-partitioning then parses "2026.bak" as the partition value — the summary
+# endpoint 500s on it and the post-swap check rolls back GOOD data (bit both
+# 2026-07-15 runs; only spending is read via a directory glob, so only it failed).
+RBK="$DATA/_rollback_nycha_spending"
+rm -rf "$RBK"; mkdir -p "$RBK"
 for FY in $BUILT_SPEND; do
   live="$DATA/nycha_spending/fiscal_year=$FY"
-  [ -d "$live" ] && mv "$live" "$live.bak"
+  [ -d "$live" ] && mv "$live" "$RBK/fiscal_year=$FY"
   mv "$BUILD/nycha_spending/fiscal_year=$FY" "$live" || log "swap spending FY$FY failed"
 done
 docker compose up -d api >/dev/null 2>&1
@@ -176,9 +246,20 @@ done
 
 if [ "$ok" = "1" ]; then
   for D in nycha_budget nycha_revenue nycha_contracts; do rm -f "$DATA/$D/$D.parquet.bak"; done
-  for FY in $BUILT_SPEND; do rm -rf "$DATA/nycha_spending/fiscal_year=$FY.bak"; done
+  rm -rf "$RBK"
   rm -rf "$BUILD"
+  # Rebuild the NYCHA→PASSPort vendor crosswalk from the just-swapped lake so it
+  # tracks vendor churn. Must run in the api container (needs BOTH the DuckDB
+  # /data lake AND Postgres — an isolated docker run isn't on the compose
+  # network). Guarded: a crosswalk hiccup must never fail the lake refresh.
+  log "refreshing NYCHA vendor crosswalk ..."
+  if docker compose exec -T api python build_nycha_vendor_crosswalk.py >>"$LOG" 2>&1; then
+    log "vendor crosswalk refreshed"
+  else
+    log "WARN: vendor crosswalk refresh failed (lake refresh unaffected) — rerun manually: docker compose exec -T api python build_nycha_vendor_crosswalk.py"
+  fi
   sentry_checkin ok
+  hc_ping success
   log "=== NYCHA refresh OK ($MODE); budget/revenue/contracts + spending FYs:$BUILT_SPEND ==="
 else
   log "post-swap live-check FAILED — rolling back"
@@ -188,8 +269,9 @@ else
   done
   for FY in $BUILT_SPEND; do
     live="$DATA/nycha_spending/fiscal_year=$FY"
-    [ -d "$live.bak" ] && { rm -rf "$live"; mv "$live.bak" "$live"; }
+    [ -d "$RBK/fiscal_year=$FY" ] && { rm -rf "$live"; mv "$RBK/fiscal_year=$FY" "$live"; }
   done
+  rm -rf "$RBK"
   docker compose up -d api >/dev/null 2>&1
   fail "post-swap check (rolled back)"
 fi

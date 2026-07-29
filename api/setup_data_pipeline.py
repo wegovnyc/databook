@@ -123,7 +123,12 @@ OUTPUT_PATH_TO_TABLE = {
     "PayrollData.csv": "payrolldata",
     "onenycindicators": "onenycindicators",
     "FTEHeadcount.csv": "fteheadcount",
-    "LL18PayandDemo.csv": "ll18payanddemoreport",
+    # ⚠ Was "ll18payanddemoreport", which is wrong. The normalizer derives the
+    # target table from the S3 filename — PurePosixPath(s3_url).stem, lowercased
+    # by /import-csv — so LL18PayandDemo.csv lands in `ll18payanddemo`. That is
+    # also the table the app reads (OrgsDatasets.php). `ll18payanddemoreport` is
+    # an orphan holding a stale copy; see DUPLICATE_DATASETS.
+    "LL18PayandDemo.csv": "ll18payanddemo",
     "ft_fte_staff_levels.csv": "ft_fte_staff_levels",
     "schoolLocations.csv": "schoollocations",
     "scaActiveProjects.csv": "scaactiveprojects",
@@ -159,6 +164,12 @@ NORMALIZED_DATASETS = {
     # Names need the normalizer's fuzzy matching — exact joins only cover ~50%.
     "civillistactive": {"entity_col": "List Agency Desc", "id_col": "wegov-org-id"},
     "ll18payanddemo": {"entity_col": "Agency Name", "id_col": "wegov-org-id"},
+    # civillist IS normalized — 3,237,454 of 3,237,466 rows (99.9996%) carry a
+    # wegov-org-id — but it was missing from this dict, so needs_normalization
+    # was false and its unmapped-entity scan never ran despite both required
+    # columns being present on the table. The scan costs 2.8s and finds exactly
+    # one real gap: DISTRICTING COMMISSION (agency code 138, 12 rows).
+    "civillist": {"entity_col": "AGENCY NAME", "id_col": "wegov-org-id"},
 }
 
 # Category classification based on normalizer tabs
@@ -368,6 +379,12 @@ METADATA_CORRECTIONS = {
         "source_url": "https://data.cityofnewyork.us/api/views/b37a-3faw/rows.csv?accessType=DOWNLOAD"},
     "capitalprojectslist":  {"socrata_id": "fi59-268w",
         "source_url": "https://data.cityofnewyork.us/api/views/fi59-268w/rows.csv?accessType=DOWNLOAD"},
+    # Listed even though it already had its id from datasets.json: without it,
+    # this file could not see that cpdb_commitments duplicates djxg-kcfi, which
+    # is exactly how that duplicate stayed active for five months. Writes the
+    # value prod already holds, so it is a no-op UPDATE.
+    "capitalprojectscommitments": {"socrata_id": "djxg-kcfi",
+        "source_url": "https://data.cityofnewyork.us/api/views/djxg-kcfi/rows.csv?accessType=DOWNLOAD"},
     "capitalbudget":        {"socrata_id": "46m8-77gv",
         "source_url": "https://data.cityofnewyork.us/api/views/46m8-77gv/rows.csv?accessType=DOWNLOAD"},
     "capitalcommitmentplan": {"socrata_id": "2cmn-uidm",
@@ -387,6 +404,38 @@ METADATA_CORRECTIONS = {
     "fire_incident_dispatch": {"socrata_id": "8m42-w767",
         "source_url": "https://data.cityofnewyork.us/api/views/8m42-w767/rows.csv?accessType=DOWNLOAD"},
 }
+
+# Duplicate registry entries — a second row pointing at a Socrata dataset that a
+# canonical entry already owns. Deactivated at setup so the scheduler skips them.
+#
+# These are NOT harmless. A duplicate never ingests, because the normalizer writes
+# to the table the CANONICAL entry owns — so the duplicate's last_ingested_at stays
+# NULL, so the scheduler's "source_updated <= last_ingested" skip never fires, so it
+# POSTs /process/<id>/async on EVERY sweep, re-running a normalizer dataset the
+# canonical entry already triggered. The normalizer runs --workers 1, so the second
+# concurrent call times out at nginx and returns an HTML 502 — which is where
+# "Attempt to decode JSON with unexpected mimetype: text/html" came from.
+#
+# cpdb_projects was deactivated by hand at some point and its identical sibling
+# cpdb_commitments was missed, so it sat in that loop from 2026-02-27 to 2026-07-28.
+# Listing both here makes the deactivation declarative and idempotent instead of a
+# manual edit somebody has to remember. tests/test_registry_seed.py fails the build
+# if a new duplicate socrata_id is seeded without being listed.
+DUPLICATE_DATASETS = [
+    # raw passport tables, superseded by extractor entries
+    'passport', 'passport_contracts', 'passport_solicitations',
+    # "(Raw)" CPDB entries — same socrata_id and normalizer dataset as
+    # capitalprojectslist (fi59-268w / 241) and
+    # capitalprojectscommitments (djxg-kcfi / 240)
+    'cpdb_projects', 'cpdb_commitments',
+    # Shares normalizer dataset 88 with ll18payanddemo. The normalizer writes to
+    # `ll18payanddemo` (S3 stem of LL18PayandDemo.csv) and that is what the app
+    # reads via OrgsDatasets.php, so this one only ever holds a stale copy — it
+    # was last written 2026-02-18 and nothing reads it. Found 2026-07-29 during
+    # the enrichment-column audit; the guards below could not see it because its
+    # normalizer id comes from datasets.json, not from this file.
+    'll18payanddemoreport',
+]
 
 # Datasets that are dated/static and should not be checked for updates
 DATED_DATASETS = [
@@ -458,8 +507,47 @@ NORMALIZER_DATASET_IDS = {
 }
 
 
+async def apply_registry_deactivations(conn):
+    """Deactivate duplicate and dated registry entries.
+
+    ⚠ Split out of register_untracked_tables and called from main() on EVERY run,
+    because that function is reachable only from populate_from_datasets_json,
+    which returns early unless a datasets.json exists at a local dev path. On
+    prod it does not — so `--populate` bailed before reaching it and a bare run
+    never called it. These lists were never enforced in production. That is how
+    cpdb_commitments stayed active for five months, and why deactivating it took
+    a hand-written UPDATE on 2026-07-28 rather than a run of this script.
+
+    Deliberately narrow. The rest of register_untracked_tables is NOT safe to run
+    unconditionally today: measured against prod on 2026-07-28, its
+    NORMALIZER_DATASET_IDS block would flip needs_normalization on 27 datasets
+    (26 false→true, plus nycjobs true→false) and its UNTRACKED_TABLES block would
+    register 4 new fire datasets. Both are real ingest-behaviour changes, so they
+    stay on the populate path until that drift is reconciled deliberately.
+
+    These two statements, by contrast, are pure and were verified to be a no-op
+    against prod at the time of writing: every listed table was already inactive.
+    """
+    await conn.execute("""
+        UPDATE dataset_registry SET is_active = FALSE
+        WHERE table_name = ANY($1::text[])
+    """, DUPLICATE_DATASETS)
+    print(f"  Deactivated {len(DUPLICATE_DATASETS)} duplicate registry entries")
+
+    await conn.execute("""
+        UPDATE dataset_registry SET is_active = FALSE
+        WHERE table_name = ANY($1::text[])
+    """, DATED_DATASETS)
+    print(f"  Deactivated {len(DATED_DATASETS)} dated/static datasets")
+
+
 async def register_untracked_tables(conn):
-    """Register tables that exist in the DB but aren't in the dataset registry."""
+    """Register tables that exist in the DB but aren't in the dataset registry.
+
+    Also applies METADATA_CORRECTIONS and NORMALIZER_DATASET_IDS. Runs only on
+    --populate — see apply_registry_deactivations for why the deactivations were
+    moved out of here, and for the measured drift that keeps the rest in place.
+    """
     count = 0
     for table_name, (display_name, source_type, category) in UNTRACKED_TABLES.items():
         try:
@@ -492,46 +580,48 @@ async def register_untracked_tables(conn):
             print(f"  ✗ {table_name} metadata: {e}")
 
     # Datasets that should bypass the external normalizer and import
-    # directly from Socrata (with post_normalize self-join backfill).
-    # Why: The normalizer at normalize.databook.nyc is behind Cloudflare,
-    # which blocks API requests. These datasets use the direct Socrata
-    # import path instead, with entity mapping via self-join.
-    DIRECT_SOCRATA_OVERRIDE = {
-        'nycjobs', 'fire_causes', 'fdny_inspections', 'fdny_violations', 'fire_incident_dispatch'
-    }
-
-    # Populate normalizer_dataset_id for datasets requiring normalization
+    # Populate normalizer_dataset_id. This loop owns THAT COLUMN ONLY.
+    #
+    # ⚠ It used to also write needs_normalization, computed as
+    # `table_name not in DIRECT_SOCRATA_OVERRIDE` — a rule with nothing to do
+    # with whether a dataset has an entity to normalize. Two code paths were
+    # therefore setting one column by different rules:
+    #
+    #   populate_from_datasets_json : needs_norm = table_name in NORMALIZED_DATASETS
+    #   here                        : needs_norm = table_name not in DIRECT_SOCRATA_OVERRIDE
+    #
+    # Measured against prod on 2026-07-28: prod agrees with the FIRST rule on 77
+    # of 80 rows, and this loop would have flipped 28 of them — all 28 in the
+    # direction that contradicts it. So prod is right and this was wrong; the
+    # only reason it never did damage is that the whole function was unreachable
+    # in production (see apply_registry_deactivations).
+    #
+    # needs_normalization now has exactly one owner: NORMALIZED_DATASETS, applied
+    # at insert time by populate_from_datasets_json. It gates the post-ingest
+    # unmapped-entity scan (data_scheduler.scan_unmapped_entities), which also
+    # requires entity_column — it does NOT select the ingest path. Routing keys
+    # on normalizer_dataset_id, which is what this loop sets.
+    #
+    # DIRECT_SOCRATA_OVERRIDE was removed with it. It claimed to make five
+    # datasets "bypass the normalizer", but bypass is decided by having no
+    # normalizer_dataset_id, and this loop set one anyway — so it never bypassed
+    # anything. Four of its five members are not in NORMALIZER_DATASET_IDS at
+    # all; the fifth, nycjobs, is normalizer-routed on prod today and ingesting
+    # fine. To genuinely make a dataset direct-Socrata, leave it out of
+    # NORMALIZER_DATASET_IDS.
     norm_count = 0
     for table_name, norm_id in NORMALIZER_DATASET_IDS.items():
         try:
-            needs_norm = table_name not in DIRECT_SOCRATA_OVERRIDE
             result = await conn.execute("""
                 UPDATE dataset_registry
-                SET normalizer_dataset_id = $2, needs_normalization = $3
+                SET normalizer_dataset_id = $2
                 WHERE table_name = $1
-            """, table_name, norm_id, needs_norm)
+            """, table_name, norm_id)
             if "UPDATE 1" in result:
                 norm_count += 1
-                if not needs_norm:
-                    print(f"  ⚡ {table_name}: direct Socrata (normalizer bypassed)")
         except Exception as e:
             print(f"  ✗ {table_name} normalizer_id: {e}")
     print(f"  Set normalizer_dataset_id for {norm_count} datasets")
-
-    # Deactivate duplicate raw passport tables (superseded by extractor entries)
-    dupes = ['passport', 'passport_contracts', 'passport_solicitations']
-    await conn.execute("""
-        UPDATE dataset_registry SET is_active = FALSE
-        WHERE table_name = ANY($1::text[])
-    """, dupes)
-    print(f"  Deactivated {len(dupes)} duplicate passport tables")
-
-    # Deactivate dated/static datasets
-    await conn.execute("""
-        UPDATE dataset_registry SET is_active = FALSE
-        WHERE table_name = ANY($1::text[])
-    """, DATED_DATASETS)
-    print(f"  Deactivated {len(DATED_DATASETS)} dated/static datasets")
 
     # Ensure the PP→FB crosswalk table exists.
     # Why: The dispatch enrichment hook (enrich_dispatch_hook) needs this
@@ -683,6 +773,12 @@ async def main():
                 return
             print(f"\nPopulating registry from {args.datasets_json}...")
             await populate_from_datasets_json(conn, args.datasets_json)
+
+        # ALWAYS, and deliberately not gated on --populate: that flag needs a
+        # datasets.json which does not exist on prod, so anything behind it is
+        # dead code there. Idempotent, DB-only, no external dependencies.
+        print("\nApplying registry deactivations...")
+        await apply_registry_deactivations(conn)
 
         if args.sync_stats or args.populate:
             await sync_table_stats(conn)

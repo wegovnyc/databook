@@ -13,14 +13,20 @@ on those instead.
 from __future__ import annotations
 
 import os
+import io
+import csv
 import time
 import math
+import logging
 import datetime
 from typing import Optional
 
 import duckdb
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
+from modules.duckpool import to_duckdb_thread
+
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/oce/nycha", tags=["nycha"])
 
 _BASE = os.environ.get("BUDGET_REVENUE_BASE", "https://nyc-databook-spending.s3.amazonaws.com")
@@ -37,6 +43,18 @@ _avail_cache: dict = {"ts": 0.0, "val": {}}
 
 def _file(domain: str) -> str:
     return f"'{_BASE.rstrip('/')}/{_FILES[domain]}'"
+
+
+def _crosswalk_clause(alias: str):
+    """(join_sql, select_sql) to LEFT JOIN the NYCHA→PASSPort vendor crosswalk and
+    expose vendor_id — only when the crosswalk parquet exists (guards fresh envs /
+    S3 base). `alias`.vendor is matched to the raw crosswalk key. Built by
+    build_nycha_vendor_crosswalk.py."""
+    path = f"{_BASE.rstrip('/')}/nycha_vendor_crosswalk.parquet"
+    if _BASE.lower().startswith("http") or not os.path.exists(path):
+        return "", ""
+    return (f"LEFT JOIN read_parquet('{path}') xw ON {alias}.vendor = xw.nycha_vendor_name",
+            ", xw.passport_supplier_id AS vendor_id")
 
 
 def _con():
@@ -202,25 +220,119 @@ async def nycha_budget_units(fiscal_year: Optional[int] = None, sort: str = "bas
         raise HTTPException(status_code=500, detail=f"NYCHA budget units failed: {exc}")
 
 
+# --- Budget line record explorer --------------------------------------------
+# A record = one budget line, collapsed to the natural line grain (safe against
+# any repeated snapshot rows; amounts MAX()ed).
+_BUDGET_LINE_GRAIN = ("year, budget_type, budget_name, expense_category, funding_source, "
+                      "responsibility_center, program, project")
+_BUDGET_REC_SORTS = {"modified": "modified", "committed": "committed", "actual": "actual",
+                     "adopted": "adopted", "unit": "responsibility_center"}
+_BUDGET_REC_COLS = ["year", "responsibility_center", "expense_category", "funding_source",
+                    "budget_type", "budget_name", "program", "project",
+                    "adopted", "modified", "committed", "actual", "remaining"]
+
+
+def _budget_lines(src: str) -> str:
+    return (
+        "SELECT year, responsibility_center, expense_category, funding_source, budget_type, "
+        "budget_name, program, project, MAX(adopted) AS adopted, MAX(modified) AS modified, "
+        'MAX(committed) AS "committed", MAX(actual_amount) AS actual, MAX(remaining) AS remaining '
+        f"FROM {src} GROUP BY {_BUDGET_LINE_GRAIN}"
+    )
+
+
+def _query_budget_records(fiscal_year, q, sort, order, page, limit) -> dict:
+    con = _con()
+    src = f"read_parquet({_file('nycha_budget')})"
+    if fiscal_year:
+        src = f"(SELECT * FROM read_parquet({_file('nycha_budget')}) WHERE year = {int(fiscal_year)})"
+    where, params = "", []
+    if q:
+        where = ("WHERE responsibility_center ILIKE ? OR expense_category ILIKE ? "
+                 "OR budget_name ILIKE ? OR funding_source ILIKE ?")
+        like = f"%{q}%"; params = [like, like, like, like]
+    full = f"WITH b AS ({_budget_lines(src)}) SELECT * FROM b {where}"
+    total = con.execute(f"SELECT COUNT(*) FROM ({full}) t", params).fetchone()[0]
+    col = _BUDGET_REC_SORTS.get(sort, "modified")
+    order_sql = "ASC" if order == "asc" else "DESC"
+    rows = con.execute(f"{full} ORDER BY {col} {order_sql} NULLS LAST LIMIT ? OFFSET ?",
+                       params + [int(limit), (max(page, 1) - 1) * int(limit)]).fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+    data = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        for k in ("adopted", "modified", "committed", "actual", "remaining"):
+            d[k] = float(d[k]) if d.get(k) is not None else 0.0
+        data.append(d)
+    return {"available": True, "data": data, "total": total, "page": page,
+            "pages": math.ceil(total / limit) if limit else 1}
+
+
+@router.get("/budget/records")
+async def nycha_budget_records(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                               sort: str = "modified", order: str = "desc",
+                               page: int = 1, limit: int = 25):
+    if not _available("nycha_budget"):
+        return {"available": False, "data": [], "total": 0, "page": 1, "pages": 1}
+    limit = max(1, min(limit, 200))
+    key = f"nycha:budget:rec:{fiscal_year}:{q}:{sort}:{order}:{page}:{limit}"
+    try:
+        return _cached(key, lambda: _query_budget_records(fiscal_year, q, sort, order, page, limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA budget records failed: {exc}")
+
+
+@router.get("/budget/records/export")
+async def nycha_budget_records_export(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                                      sort: str = "modified", order: str = "desc"):
+    if not _available("nycha_budget"):
+        raise HTTPException(status_code=404, detail="NYCHA budget not available")
+    try:
+        d = _query_budget_records(fiscal_year, q, sort, order, 1, 50000)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA budget export failed: {exc}")
+    buf = io.StringIO(); w = csv.writer(buf); w.writerow(_BUDGET_REC_COLS)
+    for row in d.get("data", []):
+        w.writerow(["" if row.get(c) is None else row.get(c) for c in _BUDGET_REC_COLS])
+    return Response(content=buf.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="nycha-budget-fy{fiscal_year or "all"}.csv"',
+        "X-Row-Count": str(len(d.get("data", []))),
+    })
+
+
 # ---------------------------------------------------------------------------
 # NYCHA Revenue  (recognized = collected; realization = recognized/modified)
 # ---------------------------------------------------------------------------
 
-# Defensive line-grain dedup, mirroring routers/budget_revenue.py: the City Revenue
-# feed repeats adopted/modified across detail rows (~460x over-count on naive SUM).
-# NYCHA's feed is smaller and looks line-grain already, but we collapse to the
-# revenue-line grain with MAX() before aggregating to be safe against the same trap.
-# ⚠ RE-VALIDATE at ingest: if totals look implausible (NYCHA revenue is ~$4-5B/yr,
-# Section 8 subsidy ~$1.6B), revisit this grain.
+# adopted/modified vs recognized are denormalized DIFFERENTLY (mirrors
+# routers/budget_revenue.py):
+#   * adopted/modified are BUDGET snapshots repeated across a revenue line's detail
+#     rows, so we collapse to the revenue-line grain and MAX() picks the headline.
+#   * recognized is ACTUAL cash and is ADDITIVE — each row is a distinct receipt
+#     (and some grains carry several rows + negative reversal adjustments), so
+#     recognized must be SUM()med, not MAX()ed. Unlike the City feed (where MAX
+#     read only ~31% of modified because a single amount recurred 30k+ times),
+#     NYCHA's feed is already near line-grain so MAX was ~93% of modified — but it
+#     still mis-nets multi-row/negative-adjustment grains (e.g. FY2025 MAX $4.81B
+#     vs the correct SUM $4.74B). NYCHA's closing_classification_name is a single
+#     value 'COLLECTED REVENUE' (uppercase; the City uses 'Collected Revenue'), so
+#     we guard case-insensitively to stay correct if accrual rows ever appear.
+#     `remaining` is derived as modified - recognized (its own column would pair
+#     with the pre-fix MAX). (Fixed 2026-07-17; prior code MAX()ed recognized.)
+# ⚠ RE-VALIDATE at ingest: NYCHA revenue is ~$4-5B/yr, Section 8 subsidy ~$1.6B.
 _REV_GRAIN = ("budget_fiscal_year, budget_name, budget_type, revenue_expense_category, "
               "funding_source, responsibility_center, revenue_category, revenue_class")
+_RECOGNIZED_SUM = ("SUM(CASE WHEN upper(closing_classification_name) = 'COLLECTED REVENUE' "
+                   "THEN recognized ELSE 0 END)")
 
 
 def _revenue_lines(src: str) -> str:
     return (
         f"SELECT budget_fiscal_year AS year, revenue_category, funding_source, "
         f"MAX(adopted) AS adopted, MAX(modified) AS modified, "
-        f"MAX(recognized) AS recognized, MAX(remaining) AS remaining "
+        f"{_RECOGNIZED_SUM} AS recognized, "
+        f"(MAX(modified) - {_RECOGNIZED_SUM}) AS remaining "
         f"FROM {src} GROUP BY {_REV_GRAIN}"
     )
 
@@ -325,6 +437,90 @@ async def nycha_revenue_sources(fiscal_year: Optional[int] = None, sort: str = "
         raise HTTPException(status_code=500, detail=f"NYCHA revenue sources failed: {exc}")
 
 
+# --- Revenue line record explorer -------------------------------------------
+# A record = one revenue line (deduped line grain). recognized is SUM()med (actual
+# additive cash, see _revenue_lines) while adopted/modified are MAX()ed (repeated
+# budget snapshots); remaining is derived modified - recognized. Kept consistent
+# with the rollup.
+_REV_REC_GRAIN = ("budget_fiscal_year, revenue_category, revenue_class, funding_source, "
+                  "budget_name, budget_type, revenue_expense_category, responsibility_center")
+_REV_REC_SORTS = {"recognized": "recognized", "modified": "modified", "adopted": "adopted",
+                  "category": "revenue_category"}
+_REV_REC_COLS = ["year", "revenue_category", "revenue_class", "funding_source", "budget_name",
+                 "budget_type", "revenue_expense_category", "responsibility_center",
+                 "adopted", "modified", "recognized", "remaining"]
+
+
+def _revenue_record_lines(src: str) -> str:
+    return (
+        "SELECT budget_fiscal_year AS year, revenue_category, revenue_class, funding_source, "
+        "budget_name, budget_type, revenue_expense_category, responsibility_center, "
+        f"MAX(adopted) adopted, MAX(modified) modified, {_RECOGNIZED_SUM} recognized, "
+        f"(MAX(modified) - {_RECOGNIZED_SUM}) remaining "
+        f"FROM {src} GROUP BY {_REV_REC_GRAIN}"
+    )
+
+
+def _query_revenue_records(fiscal_year, q, sort, order, page, limit) -> dict:
+    con = _con()
+    src = f"read_parquet({_file('nycha_revenue')})"
+    if fiscal_year:
+        src = f"(SELECT * FROM read_parquet({_file('nycha_revenue')}) WHERE budget_fiscal_year = {int(fiscal_year)})"
+    where, params = "", []
+    if q:
+        where = ("WHERE revenue_category ILIKE ? OR funding_source ILIKE ? "
+                 "OR budget_name ILIKE ? OR revenue_class ILIKE ?")
+        like = f"%{q}%"; params = [like, like, like, like]
+    full = f"WITH r AS ({_revenue_record_lines(src)}) SELECT * FROM r {where}"
+    total = con.execute(f"SELECT COUNT(*) FROM ({full}) t", params).fetchone()[0]
+    col = _REV_REC_SORTS.get(sort, "recognized")
+    order_sql = "ASC" if order == "asc" else "DESC"
+    rows = con.execute(f"{full} ORDER BY {col} {order_sql} NULLS LAST LIMIT ? OFFSET ?",
+                       params + [int(limit), (max(page, 1) - 1) * int(limit)]).fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+    data = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        for k in ("adopted", "modified", "recognized", "remaining"):
+            d[k] = float(d[k]) if d.get(k) is not None else 0.0
+        data.append(d)
+    return {"available": True, "data": data, "total": total, "page": page,
+            "pages": math.ceil(total / limit) if limit else 1}
+
+
+@router.get("/revenue/records")
+async def nycha_revenue_records(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                                sort: str = "recognized", order: str = "desc",
+                                page: int = 1, limit: int = 25):
+    if not _available("nycha_revenue"):
+        return {"available": False, "data": [], "total": 0, "page": 1, "pages": 1}
+    limit = max(1, min(limit, 200))
+    key = f"nycha:revenue:rec:{fiscal_year}:{q}:{sort}:{order}:{page}:{limit}"
+    try:
+        return _cached(key, lambda: _query_revenue_records(fiscal_year, q, sort, order, page, limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA revenue records failed: {exc}")
+
+
+@router.get("/revenue/records/export")
+async def nycha_revenue_records_export(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                                       sort: str = "recognized", order: str = "desc"):
+    if not _available("nycha_revenue"):
+        raise HTTPException(status_code=404, detail="NYCHA revenue not available")
+    try:
+        d = _query_revenue_records(fiscal_year, q, sort, order, 1, 50000)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA revenue export failed: {exc}")
+    buf = io.StringIO(); w = csv.writer(buf); w.writerow(_REV_REC_COLS)
+    for row in d.get("data", []):
+        w.writerow(["" if row.get(c) is None else row.get(c) for c in _REV_REC_COLS])
+    return Response(content=buf.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="nycha-revenue-fy{fiscal_year or "all"}.csv"',
+        "X-Row-Count": str(len(d.get("data", []))),
+    })
+
+
 # ---------------------------------------------------------------------------
 # NYCHA Contracts  (line/release-grain feed -> aggregated to contract grain)
 # ---------------------------------------------------------------------------
@@ -393,7 +589,8 @@ def _query_contracts_list(fiscal_year, q, sort, order, page, limit) -> dict:
         like = f"%{q}%"; params = [like, like, like]
     col = _CONTRACT_SORTS.get(sort, "current_amt")
     order_sql = "ASC" if order == "asc" else "DESC"
-    full = f"WITH c AS ({_contracts_grain(fy_src)}) SELECT * FROM c {outer_where}"
+    xj, xsel = _crosswalk_clause("c")
+    full = f"WITH c AS ({_contracts_grain(fy_src)}) SELECT c.*{xsel} FROM c {xj} {outer_where}"
     total = con.execute(f"SELECT COUNT(*) FROM ({full}) t", params).fetchone()[0]
     rows = con.execute(
         f"{full} ORDER BY {col} {order_sql} NULLS LAST LIMIT ? OFFSET ?",
@@ -434,6 +631,56 @@ async def nycha_contracts(fiscal_year: Optional[int] = None, q: Optional[str] = 
         return _cached(key, lambda: _query_contracts_list(fiscal_year, q, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA contracts failed: {exc}")
+
+
+_CONTRACT_EXPORT_CAP = 50000
+_CONTRACT_EXPORT_COLS = ["contract_id", "vendor", "purpose", "responsibility_center",
+                         "award_method", "contract_type", "industry", "funding_source",
+                         "pin", "start_date", "end_date", "fiscal_year",
+                         "original", "current_amt", "invoiced", "releases"]
+
+
+def _query_contracts_export(fiscal_year, q, sort, order) -> tuple:
+    """CSV of the filtered contract set (contract grain), capped. Returns (csv, n)."""
+    con = _con()
+    src = f"read_parquet({_file('nycha_contracts')})"
+    fy_src = src
+    if fiscal_year:
+        fy_src = f"(SELECT * FROM {src} WHERE TRY_CAST(fiscal_year AS INTEGER) = {int(fiscal_year)})"
+    outer_where, params = "", []
+    if q:
+        outer_where = "WHERE vendor ILIKE ? OR purpose ILIKE ? OR contract_id ILIKE ?"
+        like = f"%{q}%"; params = [like, like, like]
+    col = _CONTRACT_SORTS.get(sort, "current_amt")
+    order_sql = "ASC" if order == "asc" else "DESC"
+    cols = ", ".join(_CONTRACT_EXPORT_COLS)
+    rows = con.execute(
+        f"WITH c AS ({_contracts_grain(fy_src)}) SELECT {cols} FROM c {outer_where} "
+        f"ORDER BY {col} {order_sql} NULLS LAST LIMIT {_CONTRACT_EXPORT_CAP}", params
+    ).fetchall()
+    con.close()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_CONTRACT_EXPORT_COLS)
+    for r in rows:
+        w.writerow(["" if v is None else v for v in r])
+    return buf.getvalue(), len(rows)
+
+
+@router.get("/contracts/export")
+async def nycha_contracts_export(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                                 sort: str = "current", order: str = "desc"):
+    """Download the current filtered NYCHA contract set as CSV (capped at 50k)."""
+    if not _available("nycha_contracts"):
+        raise HTTPException(status_code=404, detail="NYCHA contracts not available")
+    try:
+        csv_text, n = _query_contracts_export(fiscal_year, q, sort, order)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA contracts export failed: {exc}")
+    return Response(content=csv_text, media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="nycha-contracts-fy{fiscal_year or "all"}.csv"',
+        "X-Row-Count": str(n), "X-Row-Cap": str(_CONTRACT_EXPORT_CAP),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -575,3 +822,461 @@ async def nycha_spending_by_development(fiscal_year: Optional[int] = None, sort:
         return _cached(key, lambda: _query_spending_by_development(fiscal_year, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA spending by-development failed: {exc}")
+
+
+# --- Spending payment-grain record explorer ---------------------------------
+# A "record" = one check-level payment (document_id). The feed explodes each
+# payment into many rows (one per development x expense-category) repeating the
+# full check_amount, so we collapse to document_id and take MAX(check_amount) as
+# the payment total. document_id IS NOT NULL excludes Payroll (aggregate-only in
+# the feed — no per-payment records). FY-scoped so each query prunes to one
+# partition (~3M rows) instead of the full 22.56M-row lake.
+_SPEND_REC_SORTS = {"amount": "amount", "date": "issue_date", "vendor": "vendor"}
+_SPEND_REC_SELECT = (
+    "SELECT document_id, MAX(vendor) vendor, MAX(issue_date) issue_date, "
+    "MAX(check_status) check_status, MAX(contract_id) contract_id, MAX(purpose) purpose, "
+    "MAX(purchase_order_type) po_type, MAX(section_8) section_8, MAX(industry) industry, "
+    "MAX(spending_category) spending_category, MAX(funding_source) funding_source, "
+    "MAX(responsibility_center) responsibility_center, MAX(expense_category) expense_category, "
+    "MAX(TRY_CAST(check_amount AS DOUBLE)) amount, "
+    "MAX(TRY_CAST(fiscal_year AS INTEGER)) fiscal_year"
+)
+
+
+def _spend_rec_where(fiscal_year, spending_category, section_8):
+    where, params = ["document_id IS NOT NULL"], []
+    if spending_category:
+        where.append("spending_category = ?"); params.append(spending_category)
+    if section_8 in ("Y", "N"):
+        where.append("section_8 = ?"); params.append(section_8)
+    return "WHERE " + " AND ".join(where), params
+
+
+def _query_spending_records(fiscal_year, q, spending_category, section_8, sort, order, page, limit) -> dict:
+    con = _con()
+    src = f"read_parquet({_spending_glob(fiscal_year)}, hive_partitioning=true)"
+    base_where, params = _spend_rec_where(fiscal_year, spending_category, section_8)
+    pay = f"{_SPEND_REC_SELECT} FROM {src} {base_where} GROUP BY document_id"
+    outer, oparams = "", []
+    if q:
+        outer = "WHERE vendor ILIKE ? OR purpose ILIKE ? OR document_id ILIKE ? OR contract_id ILIKE ?"
+        like = f"%{q}%"; oparams = [like, like, like, like]
+    xj, xsel = _crosswalk_clause("pay")
+    full = f"WITH pay AS ({pay}) SELECT pay.*{xsel} FROM pay {xj} {outer}"
+    total = con.execute(f"SELECT COUNT(*) FROM ({full}) t", params + oparams).fetchone()[0]
+    col = _SPEND_REC_SORTS.get(sort, "amount")
+    order_sql = "ASC" if order == "asc" else "DESC"
+    rows = con.execute(f"{full} ORDER BY {col} {order_sql} NULLS LAST LIMIT ? OFFSET ?",
+                       params + oparams + [int(limit), (max(page, 1) - 1) * int(limit)]).fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+    data = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        d["amount"] = float(d["amount"]) if d.get("amount") is not None else 0.0
+        data.append(d)
+    return {"available": True, "data": data, "total": total, "page": page,
+            "pages": math.ceil(total / limit) if limit else 1}
+
+
+@router.get("/spending/records")
+async def nycha_spending_records(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                                 spending_category: Optional[str] = None, section_8: Optional[str] = None,
+                                 sort: str = "amount", order: str = "desc",
+                                 page: int = 1, limit: int = 25):
+    if not _spending_available():
+        return {"available": False, "data": [], "total": 0, "page": 1, "pages": 1}
+    limit = max(1, min(limit, 200))
+    key = f"nycha:spend:rec:{fiscal_year}:{q}:{spending_category}:{section_8}:{sort}:{order}:{page}:{limit}"
+    try:
+        return _cached(key, lambda: _query_spending_records(fiscal_year, q, spending_category, section_8, sort, order, page, limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA spending records failed: {exc}")
+
+
+_SPEND_EXPORT_CAP = 50000
+_SPEND_EXPORT_COLS = ["document_id", "vendor", "issue_date", "check_status", "contract_id",
+                      "spending_category", "funding_source", "responsibility_center",
+                      "expense_category", "section_8", "po_type", "industry", "amount",
+                      "fiscal_year", "purpose"]
+
+
+@router.get("/spending/records/export")
+async def nycha_spending_records_export(fiscal_year: Optional[int] = None, q: Optional[str] = None,
+                                        spending_category: Optional[str] = None, section_8: Optional[str] = None,
+                                        sort: str = "amount", order: str = "desc"):
+    if not _spending_available():
+        raise HTTPException(status_code=404, detail="NYCHA spending not available")
+    try:
+        d = _query_spending_records(fiscal_year, q, spending_category, section_8, sort, order, 1, _SPEND_EXPORT_CAP)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA spending export failed: {exc}")
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_SPEND_EXPORT_COLS)
+    for row in d.get("data", []):
+        w.writerow(["" if row.get(c) is None else row.get(c) for c in _SPEND_EXPORT_COLS])
+    return Response(content=buf.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="nycha-payments-fy{fiscal_year or "recent"}.csv"',
+        "X-Row-Count": str(len(d.get("data", []))), "X-Row-Cap": str(_SPEND_EXPORT_CAP),
+    })
+
+
+# ---------------------------------------------------------------------------
+# NYCHA vendor activity — powers the NYCHA section on the City vendor profile
+# (routers/oce.py::get_vendor, via the nycha_vendor_crosswalk reverse lookup).
+# ---------------------------------------------------------------------------
+
+def _query_vendor_activity(names: list) -> dict:
+    """Aggregate NYCHA contract + spending activity for a set of raw NYCHA vendor
+    names (one PASSPort vendor can match several name variants). Contracts at
+    contract grain via _contracts_grain; spending as SUM(_SPEND) — the per-row
+    allocated share, NOT raw check_amount (the feed repeats check_amount on every
+    exploded row, see the _SPEND note) — plus distinct payments (document_id;
+    Payroll has none, and vendors don't appear in Payroll anyway)."""
+    ph = ", ".join("?" for _ in names)
+    out = {"contracts": None, "spending": None}
+    if _available("nycha_contracts"):
+        con = _con()
+        try:
+            src = f"read_parquet({_file('nycha_contracts')})"
+            n, cur, inv = con.execute(
+                f"WITH c AS ({_contracts_grain(src)}) "
+                f"SELECT COUNT(*), COALESCE(SUM(current_amt),0), COALESCE(SUM(invoiced),0) "
+                f"FROM c WHERE vendor IN ({ph})", names
+            ).fetchone()
+            out["contracts"] = {"count": int(n), "current": float(cur), "invoiced": float(inv)}
+        finally:
+            con.close()
+    if _spending_available():
+        con = _con()
+        try:
+            con.execute("SET memory_limit='2GB';")
+            src = f"read_parquet({_spending_glob()}, hive_partitioning=true)"
+            total, pays, min_fy, max_fy = con.execute(
+                f"SELECT COALESCE(SUM({_SPEND}),0), COUNT(DISTINCT document_id), "
+                f"MIN(fiscal_year), MAX(fiscal_year) FROM {src} WHERE vendor IN ({ph})", names
+            ).fetchone()
+            out["spending"] = {"total": float(total), "payments": int(pays),
+                               "min_year": int(min_fy) if min_fy is not None else None,
+                               "max_year": int(max_fy) if max_fy is not None else None}
+        finally:
+            con.close()
+    return out
+
+
+def vendor_activity_for_names(names: list) -> Optional[dict]:
+    """Sync (DuckDB) — call via to_duckdb_thread from async handlers. Returns
+    None when the vendor has no NYCHA activity at all, so callers can omit the
+    section entirely. Cached daily like the other NYCHA rollups."""
+    names = sorted({(n or "").strip() for n in names} - {""})
+    if not names:
+        return None
+    key = "nycha:vendor-activity:" + "|".join(names)
+    act = _cached(key, lambda: _query_vendor_activity(names))
+    c, s = act.get("contracts"), act.get("spending")
+    if not (c and c["count"]) and not (s and (s["payments"] or s["total"])):
+        return None
+    return act
+
+
+@router.get("/vendor-activity")
+async def nycha_vendor_activity(name: str):
+    """NYCHA activity rollup for one exact vendor name (as it appears in the
+    NYCHA lake). The vendor profile uses the in-process helper; this endpoint
+    exists for direct checks and other consumers."""
+    try:
+        act = await to_duckdb_thread(vendor_activity_for_names, [name])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA vendor activity failed: {exc}")
+    return {"available": act is not None, **(act or {})}
+
+
+# ---------------------------------------------------------------------------
+# NYCHA vendor directory + NYCHA-native vendor profiles.
+# NYCHA is a separate authority; a NYCHA vendor with no PASSPort record (~half of
+# contract vendors) has no City vendor profile. This lists ALL NYCHA vendors
+# (contracts ∪ spending) with their activity + crosswalk match, so matched
+# vendors link to the City profile and unmatched vendors get a NYCHA-native one.
+# ---------------------------------------------------------------------------
+
+def _crosswalk_name_to_id() -> dict:
+    """name → PASSPort id from the crosswalk parquet (empty when absent / S3 base)."""
+    xpath = f"{_BASE.rstrip('/')}/nycha_vendor_crosswalk.parquet"
+    if _BASE.lower().startswith("http") or not os.path.exists(xpath):
+        return {}
+    con = _con()
+    try:
+        rows = con.execute(
+            f"SELECT nycha_vendor_name, passport_supplier_id FROM read_parquet('{xpath}')"
+        ).fetchall()
+    finally:
+        con.close()
+    return {n: pid for (n, pid) in rows if pid}
+
+
+def _query_vendors_all() -> list:
+    """Every NYCHA vendor (contracts ∪ spending) with contract count/current/
+    invoiced (contract grain), spending total + payment count, and the crosswalk
+    vendor_id. Aggregations run once and are merged in Python (~43k vendors); the
+    spending GROUP BY scans the full lake (~10s cold) so this is cached daily and
+    the endpoint paginates/searches the cached list per request."""
+    cagg: dict = {}
+    if _available("nycha_contracts"):
+        con = _con()
+        try:
+            src = f"read_parquet({_file('nycha_contracts')})"
+            for v, n, cur, inv in con.execute(
+                f"WITH grain AS ({_contracts_grain(src)}) "
+                f"SELECT vendor, COUNT(*), COALESCE(SUM(current_amt),0), COALESCE(SUM(invoiced),0) "
+                f"FROM grain WHERE vendor IS NOT NULL AND vendor <> '' GROUP BY vendor"
+            ).fetchall():
+                cagg[v] = {"contracts": int(n), "current": float(cur), "invoiced": float(inv)}
+        finally:
+            con.close()
+    sagg: dict = {}
+    if _spending_available():
+        con = _con()
+        try:
+            con.execute("SET memory_limit='2GB';")
+            src = f"read_parquet({_spending_glob()}, hive_partitioning=true)"
+            for v, sp, pay in con.execute(
+                f"SELECT vendor, COALESCE(SUM({_SPEND}),0), COUNT(DISTINCT document_id) FROM {src} "
+                f"WHERE vendor IS NOT NULL AND vendor NOT IN ('N/A','') GROUP BY vendor"
+            ).fetchall():
+                sagg[v] = {"spending": float(sp), "payments": int(pay)}
+        finally:
+            con.close()
+    xw = _crosswalk_name_to_id()
+    out = []
+    for v in set(cagg) | set(sagg):
+        c = cagg.get(v, {}); s = sagg.get(v, {})
+        out.append({
+            "vendor": v,
+            "contracts": c.get("contracts", 0), "current": c.get("current", 0.0),
+            "invoiced": c.get("invoiced", 0.0),
+            "spending": s.get("spending", 0.0), "payments": s.get("payments", 0),
+            "vendor_id": xw.get(v),
+        })
+    return out
+
+
+_VEND_SORTS = {"spending", "current", "invoiced", "contracts", "payments", "vendor"}
+
+
+def _vendors_page(q, sort, order, page, limit) -> dict:
+    rows = _cached("nycha:vendors:all", _query_vendors_all)
+    if q:
+        ql = q.lower()
+        rows = [r for r in rows if ql in (r["vendor"] or "").lower()]
+    key = sort if sort in _VEND_SORTS else "spending"
+    rev = order != "asc"
+    if key == "vendor":
+        rows = sorted(rows, key=lambda r: (r["vendor"] or "").lower(), reverse=rev)
+    else:
+        rows = sorted(rows, key=lambda r: r.get(key) or 0, reverse=rev)
+    total = len(rows)
+    start = (max(page, 1) - 1) * limit
+    return {"available": True, "data": rows[start:start + limit], "total": total,
+            "page": page, "pages": math.ceil(total / limit) if limit else 1}
+
+
+@router.get("/vendors")
+async def nycha_vendors(q: Optional[str] = None, sort: str = "spending", order: str = "desc",
+                        page: int = 1, limit: int = 25):
+    """Searchable/sortable/paginated directory of all NYCHA vendors."""
+    if not (_available("nycha_contracts") or _spending_available()):
+        return {"available": False, "data": [], "total": 0, "page": 1, "pages": 1}
+    limit = max(1, min(int(limit), 200))
+    try:
+        return await to_duckdb_thread(_vendors_page, q, sort, order, page, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA vendors failed: {exc}")
+
+
+_VEND_EXPORT_CAP = 50000
+_VEND_EXPORT_COLS = ["vendor", "vendor_id", "contracts", "current", "invoiced", "spending", "payments"]
+
+
+@router.get("/vendors/export")
+async def nycha_vendors_export(q: Optional[str] = None, sort: str = "spending", order: str = "desc"):
+    if not (_available("nycha_contracts") or _spending_available()):
+        raise HTTPException(status_code=404, detail="NYCHA vendors not available")
+    try:
+        d = await to_duckdb_thread(_vendors_page, q, sort, order, 1, _VEND_EXPORT_CAP)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA vendors export failed: {exc}")
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_VEND_EXPORT_COLS)
+    for row in d.get("data", []):
+        w.writerow(["" if row.get(c) is None else row.get(c) for c in _VEND_EXPORT_COLS])
+    return Response(content=buf.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="nycha-vendors.csv"',
+        "X-Row-Count": str(len(d.get("data", []))), "X-Row-Cap": str(_VEND_EXPORT_CAP),
+    })
+
+
+def _vendor_crosswalk_id(name: str) -> Optional[str]:
+    xpath = f"{_BASE.rstrip('/')}/nycha_vendor_crosswalk.parquet"
+    if _BASE.lower().startswith("http") or not os.path.exists(xpath):
+        return None
+    con = _con()
+    try:
+        r = con.execute(
+            f"SELECT passport_supplier_id FROM read_parquet('{xpath}') "
+            f"WHERE nycha_vendor_name = ? AND passport_supplier_id IS NOT NULL LIMIT 1", [name]
+        ).fetchone()
+    finally:
+        con.close()
+    return r[0] if r else None
+
+
+def _query_vendor_contracts(name: str) -> list:
+    """Contract-grain rows for one exact NYCHA vendor name (capped)."""
+    if not _available("nycha_contracts"):
+        return []
+    con = _con()
+    try:
+        src = f"(SELECT * FROM read_parquet({_file('nycha_contracts')}) WHERE vendor = ?)"
+        rows = con.execute(
+            f"WITH c AS ({_contracts_grain(src)}) SELECT c.* FROM c "
+            f"ORDER BY current_amt DESC NULLS LAST LIMIT 500", [name]
+        ).fetchall()
+        cols = [d[0] for d in con.description]
+    finally:
+        con.close()
+    data = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        for k in ("original", "current_amt", "invoiced", "releases"):
+            d[k] = float(d[k]) if d.get(k) is not None else 0.0
+        data.append(d)
+    return data
+
+
+def _vendor_profile(name: str) -> dict:
+    act = vendor_activity_for_names([name])
+    return {
+        "available": act is not None,
+        "vendor": name,
+        "vendor_id": _vendor_crosswalk_id(name),
+        "contracts": (act or {}).get("contracts"),
+        "spending": (act or {}).get("spending"),
+        "contract_list": _query_vendor_contracts(name),
+    }
+
+
+@router.get("/vendor")
+async def nycha_vendor(name: str):
+    """NYCHA-native vendor profile (rollup + contract list) for one exact vendor
+    name. `vendor_id` is set when the vendor IS crosswalked — the frontend then
+    redirects to the richer City vendor profile instead of rendering this."""
+    try:
+        return await to_duckdb_thread(_vendor_profile, name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA vendor profile failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# NYCHA individual contract profile — contract-grain detail + actual payments
+# (the spending lake carries the same contract_id, and DuckDB prunes on it fast).
+# ---------------------------------------------------------------------------
+
+def _query_nycha_contract(cid: str) -> Optional[dict]:
+    if not _available("nycha_contracts"):
+        return None
+    con = _con()
+    try:
+        src = f"(SELECT * FROM read_parquet({_file('nycha_contracts')}) WHERE contract_id = ?)"
+        row = con.execute(f"WITH c AS ({_contracts_grain(src)}) SELECT c.* FROM c LIMIT 1", [cid]).fetchone()
+        cols = [d[0] for d in con.description]
+    finally:
+        con.close()
+    if not row:
+        return None
+    contract = dict(zip(cols, row))
+    for k in ("original", "current_amt", "invoiced", "releases"):
+        contract[k] = float(contract[k]) if contract.get(k) is not None else 0.0
+
+    vid = _vendor_crosswalk_id(contract["vendor"]) if contract.get("vendor") else None
+
+    payments = None
+    if _spending_available():
+        con = _con()
+        try:
+            con.execute("SET memory_limit='2GB';")
+            src = f"read_parquet({_spending_glob()}, hive_partitioning=true)"
+            total, cnt, mn, mx = con.execute(
+                f"SELECT COALESCE(SUM({_SPEND}),0), COUNT(DISTINCT document_id), "
+                f"MIN(fiscal_year), MAX(fiscal_year) FROM {src} WHERE contract_id = ?", [cid]
+            ).fetchone()
+            by_year = con.execute(
+                f"SELECT fiscal_year, COALESCE(SUM({_SPEND}),0) FROM {src} "
+                f"WHERE contract_id = ? GROUP BY fiscal_year ORDER BY fiscal_year", [cid]
+            ).fetchall()
+            plist = con.execute(
+                f"WITH pay AS ({_SPEND_REC_SELECT} FROM {src} "
+                f"WHERE contract_id = ? AND document_id IS NOT NULL GROUP BY document_id) "
+                f"SELECT * FROM pay ORDER BY amount DESC NULLS LAST LIMIT 100", [cid]
+            ).fetchall()
+            pcols = [d[0] for d in con.description]
+        finally:
+            con.close()
+        plist_out = []
+        for r in plist:
+            d = dict(zip(pcols, r))
+            d["amount"] = float(d["amount"]) if d.get("amount") is not None else 0.0
+            plist_out.append(d)
+        payments = {
+            "total": float(total), "count": int(cnt),
+            "min_year": int(mn) if mn is not None else None,
+            "max_year": int(mx) if mx is not None else None,
+            "by_year": [{"year": int(y), "spending": float(v)} for (y, v) in by_year if y is not None],
+            "list": plist_out,
+        }
+    return {"available": True, "contract": contract, "vendor_id": vid, "payments": payments}
+
+
+def search_vendors(term: str, limit: int = 8) -> list:
+    """Name search over NYCHA CONTRACT vendors for global-search federation.
+    Scoped to the contracts parquet (small/fast, pruned by the ILIKE before the
+    grain) rather than the full 43k contracts∪spending aggregate, so the navbar
+    typeahead stays snappy — the meaningful NYCHA-only vendors (e.g. ADAMS
+    EUROPEAN) are contract vendors. Attaches the crosswalk vendor_id so matched
+    names can link to the City profile. Resilient: returns [] on any failure."""
+    term = (term or "").strip()
+    if not term or not _available("nycha_contracts"):
+        return []
+    try:
+        con = _con()
+        try:
+            src = f"(SELECT * FROM read_parquet({_file('nycha_contracts')}) WHERE vendor ILIKE ?)"
+            rows = con.execute(
+                f"WITH c AS ({_contracts_grain(src)}) "
+                f"SELECT vendor, COUNT(*) contracts, COALESCE(SUM(current_amt),0) cur "
+                f"FROM c WHERE vendor IS NOT NULL AND vendor <> '' "
+                f"GROUP BY vendor ORDER BY cur DESC LIMIT ?",  # `current` is a reserved word
+                [f"%{term}%", int(limit)]
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception as exc:  # resilient (must never break federated search) but not silent
+        logger.warning(f"[nycha] search_vendors failed for {term!r}: {exc}")
+        return []
+    xw = _crosswalk_name_to_id()
+    return [{"vendor": v, "contracts": int(n), "current": float(cur), "vendor_id": xw.get(v)}
+            for (v, n, cur) in rows]
+
+
+@router.get("/contract")
+async def nycha_contract(id: str):
+    """Individual NYCHA contract profile: contract-grain detail + actual payments
+    (from the spending lake, matched on contract_id)."""
+    try:
+        data = await to_duckdb_thread(_query_nycha_contract, id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"NYCHA contract profile failed: {exc}")
+    if data is None:
+        return {"available": False}
+    return data

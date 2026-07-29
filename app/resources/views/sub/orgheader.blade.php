@@ -3,6 +3,53 @@
      district "Representing" links, parent "Reports to" + orgsChartFocus diagram link,
      social icon loop with copyLinkM()/popover hooks + #details-permalink/#orgRSSNews textareas,
      and the $menu/$slist section nav (orgProfile/orgSection routes, $active/$activeDropDown). --}}
+@php
+    // NYCHA is a separate authority: every Finances subsection is empty for it
+    // EXCEPT Council Discretionary Funding, and its procurement lives in the
+    // dedicated /oce/nycha/* domains. Collapse the empty Finances dropdown + the
+    // Procurement tab into a single "Finances & Procurement" DROPDOWN (matching
+    // the other profiles' section dropdowns) whose items are the NYCHA finance
+    // domains + Council Funding. Applied centrally here so it shows on every
+    // NYCHA org page; guarded to NYCHA.
+    $isNychaOrg = (string) ($org['id'] ?? '') === '170020034'
+        || stripos($org['name'] ?? '', 'housing authority') !== false;
+    if ($isNychaOrg && isset($menu)) {
+        $nychaFinItems = ['procurement-highlights', 'procurement-nycha-budget',
+            'procurement-nycha-revenue', 'procurement-nycha-contracts',
+            'procurement-nycha-spending', 'procurement-nycha-vendors',
+            'city-council-discretionary'];
+        // Highlight the dropdown button across all its sub-pages (the specific
+        // item highlights via $active == $subsect, so leave $active as-is). The
+        // NYCHA-native vendor profile (procurement-nycha-vendor, a detail page —
+        // not a menu item) passes $active='procurement-nycha-vendors' so the
+        // Vendors item stays lit.
+        if (isset($active) && in_array($active, $nychaFinItems, true)) {
+            $activeDropDown = 'Finances & Procurement';
+        }
+        $newMenu = [];
+        $added = false;
+        foreach ($menu as $k => $v) {
+            $isFinancesDD = ($k === 'Finances');
+            $isProcTab = (is_string($v) && $v === 'procurement-highlights');
+            if ($isFinancesDD || $isProcTab) {
+                if (!$added) { $newMenu['Finances & Procurement'] = $nychaFinItems; $added = true; }
+                continue;
+            }
+            if (is_int($k)) { $newMenu[] = $v; } else { $newMenu[$k] = $v; }
+        }
+        if (!$added) { $newMenu['Finances & Procurement'] = $nychaFinItems; }
+        $menu = $newMenu;
+        $slist = array_merge($slist ?? [], [
+            'procurement-highlights'      => 'Finances Overview',
+            'procurement-nycha-budget'    => 'Budget',
+            'procurement-nycha-revenue'   => 'Revenue',
+            'procurement-nycha-contracts' => 'Contracts',
+            'procurement-nycha-spending'  => 'Spending',
+            'procurement-nycha-vendors'   => 'Vendors',
+            'city-council-discretionary'  => 'Council Funding',
+        ]);
+    }
+@endphp
 <div class="db-profile-header" id="org-header">
 	<div class="inner_container">
 		<div class="container">

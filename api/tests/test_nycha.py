@@ -173,3 +173,111 @@ async def test_nycha_spending_by_development_routable(client):
     resp = await client.get("/oce/nycha/spending/by-development")
     assert resp.status_code != 404, "NYCHA spending by-development endpoint missing"
     assert "available" in resp.json()
+
+
+# --- Vendor activity (City vendor profile NYCHA section) ----------------------
+
+@pytest.mark.asyncio
+async def test_nycha_vendor_activity_routable(client):
+    resp = await client.get("/oce/nycha/vendor-activity", params={"name": "ACME"})
+    assert resp.status_code != 404, "NYCHA vendor-activity endpoint missing"
+    assert "available" in resp.json()
+
+
+def test_vendor_activity_aggregates_amount_spent(tmp_path, monkeypatch):
+    """vendor_activity_for_names must aggregate contracts at contract grain and
+    spending as SUM(amount_spent) — NOT the repeated check_amount — and return
+    None for vendors with no NYCHA activity."""
+    duckdb = pytest.importorskip("duckdb")
+    from routers import nycha
+
+    (tmp_path / "nycha_contracts").mkdir()
+    (tmp_path / "nycha_spending" / "fiscal_year=2024").mkdir(parents=True)
+    con = duckdb.connect()
+    # Contracts: C1 appears as 2 FY line rows (must collapse to 1 contract).
+    con.execute("""CREATE TABLE c AS SELECT * FROM (VALUES
+        ('C1','ACME','p','rc','m','t','i','f','PIN','2023-01-01','2025-01-01',2,100000.0,150000.0,60000.0,'2023'),
+        ('C1','ACME','p','rc','m','t','i','f','PIN','2023-01-01','2025-01-01',2,100000.0,150000.0,60000.0,'2024'),
+        ('C2','BETA','p','rc','m','t','i','f','PIN','2023-01-01','2025-01-01',1,500000.0,500000.0,500000.0,'2024')
+    ) t(contract_id, vendor, purpose, responsibility_center, award_method, contract_type,
+        industry, funding_source, pin, start_date, end_date, number_of_releases,
+        contract_original_amount, contract_current_amount, contract_invoiced_amount, fiscal_year)""")
+    con.execute(f"COPY c TO '{tmp_path}/nycha_contracts/nycha_contracts.parquet' (FORMAT PARQUET)")
+    # Spending: one payment (D1) exploded into 2 rows repeating check_amount=100;
+    # amount_spent carries the allocated shares (60 + 40).
+    con.execute("""CREATE TABLE s AS SELECT * FROM (VALUES
+        ('D1','ACME', 60.0, 100.0, 'Contracts'),
+        ('D1','ACME', 40.0, 100.0, 'Contracts'),
+        ('D2','BETA', 50.0,  50.0, 'Contracts')
+    ) t(document_id, vendor, amount_spent, check_amount, spending_category)""")
+    con.execute(f"COPY s TO '{tmp_path}/nycha_spending/fiscal_year=2024/part-0.parquet' (FORMAT PARQUET)")
+    con.close()
+
+    monkeypatch.setattr(nycha, "_BASE", str(tmp_path))
+    monkeypatch.setattr(nycha, "_avail_cache", {"ts": 0.0, "val": {}})
+    monkeypatch.setattr(nycha, "_CACHE", {})
+
+    act = nycha.vendor_activity_for_names(["ACME"])
+    assert act["contracts"]["count"] == 1
+    assert act["contracts"]["current"] == 150000.0
+    assert act["contracts"]["invoiced"] == 60000.0
+    assert act["spending"]["total"] == 100.0, "must SUM(amount_spent), not repeated check_amount"
+    assert act["spending"]["payments"] == 1
+    assert act["spending"]["min_year"] == 2024 and act["spending"]["max_year"] == 2024
+
+    assert nycha.vendor_activity_for_names(["NOBODY"]) is None
+    assert nycha.vendor_activity_for_names([]) is None
+
+
+# --- Vendor directory + NYCHA-native vendor profile --------------------------
+
+@pytest.mark.asyncio
+async def test_nycha_vendors_routable(client):
+    resp = await client.get("/oce/nycha/vendors")
+    assert resp.status_code != 404, "NYCHA vendors endpoint missing"
+    assert "available" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_nycha_vendor_profile_routable(client):
+    resp = await client.get("/oce/nycha/vendor", params={"name": "ACME"})
+    assert resp.status_code != 404, "NYCHA vendor profile endpoint missing"
+    assert "available" in resp.json()
+
+
+def test_vendors_page_search_sort_paginate(monkeypatch):
+    """_vendors_page filters by substring, sorts by the chosen key, paginates —
+    over the cached full list (no DuckDB needed)."""
+    from routers import nycha
+    fake = [
+        {"vendor": "ACME CORP", "contracts": 3, "current": 300.0, "invoiced": 0.0, "spending": 50.0, "payments": 2, "vendor_id": "1"},
+        {"vendor": "BETA LLC", "contracts": 1, "current": 900.0, "invoiced": 0.0, "spending": 10.0, "payments": 1, "vendor_id": None},
+        {"vendor": "ACME LABS", "contracts": 0, "current": 0.0, "invoiced": 0.0, "spending": 999.0, "payments": 9, "vendor_id": None},
+    ]
+    monkeypatch.setattr(nycha, "_CACHE", {})
+    monkeypatch.setattr(nycha, "_query_vendors_all", lambda: fake)
+
+    # sort by current desc
+    r = nycha._vendors_page(None, "current", "desc", 1, 25)
+    assert [x["vendor"] for x in r["data"]][0] == "BETA LLC"
+    assert r["total"] == 3
+    # substring search
+    r = nycha._vendors_page("acme", "spending", "desc", 1, 25)
+    assert r["total"] == 2 and r["data"][0]["vendor"] == "ACME LABS"
+    # pagination
+    r = nycha._vendors_page(None, "spending", "desc", 2, 2)
+    assert r["page"] == 2 and r["pages"] == 2 and len(r["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_nycha_contract_profile_routable(client):
+    resp = await client.get("/oce/nycha/contract", params={"id": "PA1429247"})
+    assert resp.status_code != 404, "NYCHA contract profile endpoint missing"
+    assert "available" in resp.json()
+
+
+def test_search_vendors_empty_and_guarded(monkeypatch):
+    from routers import nycha
+    assert nycha.search_vendors("") == []
+    monkeypatch.setattr(nycha, "_available", lambda d: False)
+    assert nycha.search_vendors("adams") == []

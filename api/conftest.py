@@ -56,6 +56,23 @@ sys.modules.setdefault("postgrex", _mock_postgrex)
 sys.modules.setdefault("modules.postgrex", _mock_postgrex)
 sys.modules.setdefault("modules.postgrex.asyncmodel", _mock_postgrex)
 
+# modules.duckpool is deliberately NOT mocked. It is pure stdlib (a dedicated
+# ThreadPoolExecutor for DuckDB work — see modules/duckpool.py) with no external
+# state, and tests/test_duckpool.py asserts its real thread behaviour, which is what
+# keeps blocking Parquet scans off the executor asyncpg needs for DNS. The "modules"
+# MagicMock above would otherwise swallow the import.
+import importlib.util as _ilu  # noqa: E402
+
+_duckpool_spec = _ilu.spec_from_file_location(
+    "modules.duckpool", os.path.join(_api_dir, "modules", "duckpool.py")
+)
+_duckpool = _ilu.module_from_spec(_duckpool_spec)
+_duckpool_spec.loader.exec_module(_duckpool)
+sys.modules.setdefault("modules.duckpool", _duckpool)
+# ...and hang it off the mocked "modules" package too, so `from modules import
+# duckpool` resolves to the real module instead of a MagicMock attribute.
+_mock_autoload.duckpool = _duckpool
+
 # Now import the app — all dependency chains are short-circuited.
 from main import app  # noqa: E402
 
