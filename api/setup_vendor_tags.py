@@ -10,10 +10,17 @@ import sys
 sys.path.append('/app/modules')
 from config import Config
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 async def setup():
     Config.load(file='env.yaml')
     db_user = os.environ.get('POSTGRES_USER', Config.db.get('user', 'postgres'))
-    db_pass = os.environ.get('POSTGRES_PASSWORD', Config.db.get('pwd', 'password'))
+    db_pass = dbcreds.password(Config.db.get('pwd', 'password'))
     db_host = os.environ.get('POSTGRES_HOST', Config.db.get('host', '127.0.0.1'))
     db_name = os.environ.get('POSTGRES_DB', Config.db.get('dbname', 'databook'))
     auth = f'{db_user}:{db_pass}' if db_pass else db_user

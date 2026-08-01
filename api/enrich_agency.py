@@ -14,7 +14,25 @@ Both derivations are idempotent (ON CONFLICT upsert) and respect the `curated`
 flag: rows with curated=true are human overrides and are never overwritten.
 """
 
+import os
+import sys
+
 import asyncpg
+
+sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
+try:
+    import orgfilter
+except ImportError:
+    from modules import orgfilter
+
+# ⚠ Both derivations used to filter `w.type = 'City Agency'`. Since the OTI
+# registry adoption (2026-07-30) `wegov_orgs.type` is a MIXED vocabulary, and
+# ~117 of those agencies now carry OTI's type instead (`Mayoral Agency`,
+# `Mayoral Office`, `Division`, `Advisory or Regulatory Organization`…). Left
+# alone, this hook would have silently stopped enriching them — the derived
+# tables would just get smaller, with nothing raising. Substituted at import so
+# the vocabulary lives in exactly one place.
+_GOV_TYPES_SQL = orgfilter.sql_type_list(orgfilter.AGENCY_ENRICHMENT_TYPES)
 
 # --- Agency heads -----------------------------------------------------------
 
@@ -61,7 +79,7 @@ WITH scored AS (
         END AS rank
     FROM wegov_orgs w
     JOIN nycgreenbook gb ON gb."wegov-org-id" = w.id::text
-    WHERE w.type = 'City Agency'
+    WHERE w.type IN (__GOV_TYPES__)
       AND COALESCE(gb."First Name",'') !~* '^vacant$'
       AND COALESCE(gb."Last Name",'')  !~* '^vacant$'
 ),
@@ -116,7 +134,7 @@ WITH addr AS (
         NULLIF(TRIM(gb."Zip Code"), '') AS zip
     FROM wegov_orgs w
     JOIN nycgreenbook gb ON gb."wegov-org-id" = w.id::text
-    WHERE w.type = 'City Agency'
+    WHERE w.type IN (__GOV_TYPES__)
 ),
 grouped AS (
     SELECT org_id, agency_name, street, city, state, zip, count(*) AS n
@@ -159,7 +177,10 @@ async def derive_agency_enrichment_hook(conn: asyncpg.Connection):
     ):
         try:
             await conn.execute(ddl)
-            await conn.execute(derive)
+            # __GOV_TYPES__ is substituted here rather than at module scope
+            # because these SQL bodies contain regex metacharacters that make
+            # f-strings and .format() hazardous. See _GOV_TYPES_SQL.
+            await conn.execute(derive.replace("__GOV_TYPES__", _GOV_TYPES_SQL))
             n = await conn.fetchval(f"SELECT count(*) FROM {label}")
             print(f"[enrich_agency] ✓ {label}: {n} rows")
         except Exception as e:

@@ -8,7 +8,12 @@ async def main():
     await PostgresModelAsync.connect()
     print("Connected to database.")
     
-    query = 'SELECT count(*) as count FROM wegov_orgs WHERE "type" IN (\'City Agency\', \'City Fund\', \'Community Board\', \'Economic Development Organization\', \'Elected Office\', \'State Agency\')'
+    # The vocabulary is mixed since the OTI adoption; orgfilter owns it.
+    import sys, os
+    sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
+    from modules import orgfilter
+    query = ('SELECT count(*) as count FROM wegov_orgs WHERE "type" IN ('
+             + orgfilter.sql_type_list(orgfilter.DIRECTORY_TYPES) + ')')
     print(f"Running query: {query}")
     
     try:

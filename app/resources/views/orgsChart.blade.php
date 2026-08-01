@@ -21,6 +21,58 @@
 		<h1>Citywide Organizational Chart</h1>
 		<p class="db-page-lead">The relationship between city officials and agencies, top to bottom. Click an entity to open its profile; use the arrows to expand or collapse branches.</p>
 
+		@php
+			$cv = $chartView ?? 'databook';
+			$cc = $chartCounts ?? ['databook' => 0, 'nyc' => 0];
+		@endphp
+
+		{{-- Two views of the same data. Databook is the default: it excludes only
+		     what WE mark off-chart. The NYC view additionally honours OTI's
+		     in_org_chart flag, which is stricter — see App\Custom\OrgChart. --}}
+		<div class="db-filter-pills" style="margin: var(--db-space-2) 0;">
+			<a class="db-filter-pill @if ($cv === 'databook') is-active @endif"
+			   href="{{ route('orgsChart') }}">
+				<i class="bi bi-diagram-3"></i> Databook view
+				@if ($cc['databook']) <span class="db-badge db-badge-neutral">{{ $cc['databook'] }}</span> @endif
+			</a>
+			<a class="db-filter-pill @if ($cv === 'nyc') is-active @endif"
+			   href="{{ route('orgsChart') }}?view=nyc">
+				<i class="bi bi-bank"></i> NYC official view
+				@if ($cc['nyc']) <span class="db-badge db-badge-neutral">{{ $cc['nyc'] }}</span> @endif
+			</a>
+		</div>
+
+		{{-- ⚠ Keep this copy DERIVED, not a hand-written list. An earlier version
+		     named five bodies as the difference and four of them were wrong: it
+		     described the change from the old chart, not the gap between these
+		     two views. The counts come from the data, so they cannot drift. --}}
+		{{-- ⚠ Every conditional phrase is precomputed here, NOT inlined with @if.
+		     A Blade directive glued to a word character is not compiled — the
+		     documented gotcha in CLAUDE.md — and `chart@if (...)` shipped a 500
+		     ("unexpected 'endif'") that `php -l` cannot catch, because the file
+		     is valid PHP either way. --}}
+		@php
+			$fewer = max(0, ($cc['databook'] ?? 0) - ($cc['nyc'] ?? 0));
+			$fewerPhrase = $fewer ? "{$fewer} fewer than" : 'the same as';
+			$fewerParen = $fewer ? " ({$fewer} fewer)" : '';
+		@endphp
+		<p class="db-page-lead" style="font-size: var(--db-text-sm); margin-bottom: var(--db-space-2);">
+			@if ($cv === 'nyc')
+				<i class="bi bi-bank"></i> Showing only organizations that NYC's
+				official agency registry marks as being on the org chart —
+				{{ $fewerPhrase }} the Databook view. Bodies it leaves out, such as
+				the Board of Elections and the Community Boards, still have full
+				profiles; they are simply not on the City's own chart.
+				<a href="{{ route('orgsChart') }}">Back to the Databook view</a>.
+			@else
+				<i class="bi bi-diagram-3"></i> Databook's own chart, which also
+				includes bodies that sit outside the Mayor's official org chart.
+				Switch to the
+				<a href="{{ route('orgsChart') }}?view=nyc">NYC official view</a>
+				for only what the City itself places on the chart{{ $fewerParen }}.
+			@endif
+		</p>
+
 		@if (!empty($chart))
 			<div class="d-flex" style="gap: var(--db-space-1); margin: var(--db-space-2) 0;">
 				<button type="button" class="db-btn db-btn-outline db-btn-sm" id="oc-expand"><i class="bi bi-arrows-expand"></i> Expand all</button>

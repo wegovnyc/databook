@@ -12,6 +12,13 @@ from datetime import datetime
 sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
 from config import Config
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 # S3 Base URL
 S3_BASE = "https://databook2.s3.amazonaws.com"
 
@@ -152,7 +159,7 @@ def clean_money(val):
 async def get_db_connection():
     Config.load(file='env.yaml')
     db_user = os.environ.get('POSTGRES_USER', Config.db.get('user', 'postgres'))
-    db_pass = os.environ.get('POSTGRES_PASSWORD', Config.db.get('pwd', 'password'))
+    db_pass = dbcreds.password(Config.db.get('pwd', 'password'))
     db_host = os.environ.get('POSTGRES_HOST', Config.db.get('host', '127.0.0.1'))
     db_name = os.environ.get('POSTGRES_DB', Config.db.get('dbname', 'databook'))
     

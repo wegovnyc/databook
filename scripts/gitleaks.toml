@@ -1,0 +1,48 @@
+# gitleaks config for the public-snapshot secret scan (scripts/sync-public.sh).
+#
+# ⚠ THIS FILE LOOSENS THE GATE THAT STANDS BETWEEN THE PRIVATE HISTORY AND A
+# PUBLIC PUSH. A credential pushed to a public repo is not undone by deleting
+# the commit. Every allowlist below is therefore scoped to a specific rule AND a
+# specific path AND a specific regex — never a blanket disable, and never a
+# whole-rule exemption.
+#
+# Extends the default ruleset rather than replacing it: without this, defining a
+# config file would silently drop every built-in rule and the scan would pass by
+# finding nothing.
+[extend]
+useDefault = true
+
+# ── Airtable record ids are NOT Airtable API keys ────────────────────────────
+#
+# gitleaks' `airtable-api-key` rule matches a bare 14-char alphanumeric token,
+# which also matches an Airtable RECORD id (`recTZLn26klvFYOxj`). Record ids are
+# row identifiers: they are stored in `wegov_orgs.airtable_id` on all 1,250 org
+# rows, they appear in the org chart's restoration record, and they are useless
+# without a key. They started failing the scan on 2026-07-31 when Phase 1 added
+# the chart-node restoration script.
+#
+# ⚠ SCOPED THREE WAYS so a real credential still fails the build:
+#   * only the `airtable-api-key` rule,
+#   * only in the two files that legitimately carry record ids,
+#   * only for tokens with the `rec` prefix.
+# A real Airtable PAT (`pat…`) or a legacy key (`key…`) in those same files is
+# still caught, as is a `rec…` token anywhere else in the tree.
+# ⚠ regexTarget MUST be "secret", not "match". Measured 2026-07-31: with
+# "match" the regex is tested against the whole matched LINE, so a line
+# containing a record id allowlisted every other credential on it — a planted
+# legacy Airtable key (`key…`) in the same file was silently swallowed.
+# Targeting the secret itself means only the `rec…` token is exempt.
+[[rules]]
+id = "airtable-api-key"
+[rules.allowlist]
+# ⚠ AND, not the default OR. Measured: with the default, the `paths` entry alone
+# exempts the file, so EVERY credential in it is allowlisted — a planted legacy
+# Airtable key was swallowed even after the regex was correct. Both conditions
+# must hold: the right file AND the `rec…` shape.
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^rec[A-Za-z0-9]{14}$''']
+paths = [
+    '''api/restore_org_chart_nodes\.py''',
+    '''api/tests/test_adopt_nyc_orgs\.py''',
+]

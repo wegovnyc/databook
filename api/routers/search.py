@@ -24,6 +24,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query
 from modules.postgrex.asyncmodel import PostgresModelAsync
 from modules.duckpool import to_duckdb_thread
+from modules import orgfilter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Search"])
@@ -61,19 +62,46 @@ async def _rows(sql: str, params: list) -> list:
 # scripts/search_fts_indexes.sql) so the planner uses them. People stay
 # substring-only — English stemming/ranking hurts proper names.
 
+_HAS_DISPLAY_NAME = None
+
+
+async def _has_display_name() -> bool:
+    """Probe once for `wegov_orgs.display_name` — same reasoning as orgfilter."""
+    global _HAS_DISPLAY_NAME
+    if _HAS_DISPLAY_NAME is None:
+        rows = await _rows(
+            "SELECT 1 AS ok FROM information_schema.columns "
+            "WHERE table_name = 'wegov_orgs' AND column_name = 'display_name'", [])
+        _HAS_DISPLAY_NAME = bool(rows)
+    return _HAS_DISPLAY_NAME
+
+
 async def _orgs(like, term, prefix, limit):
-    rows = await _rows("""
+    # Retired (merged-away) orgs must not surface here. The clause is probed
+    # once — inlining it would make this group silently return [] on a database
+    # without the column, because _rows() swallows the error (cf. #146).
+    live = await orgfilter.live_clause(lambda sql: _rows(sql, []))
+    # `display_name` holds NYC's official name where it differs from ours (see
+    # adopt_nyc_orgs.py). It is shown as the title and matched on for recall, but
+    # the URL slug stays derived from `name` so existing links do not move.
+    # COALESCE'd rather than assumed present: a database that has not run the
+    # adoption has no such column, and _rows() swallows the error into [] — the
+    # orgs group would go silently empty (#146).
+    dn = "display_name" if await _has_display_name() else "NULL::text"
+    rows = await _rows(f"""
         WITH q AS (SELECT plainto_tsquery('english', $5) AS tsq)
-        SELECT id, name, type,
+        SELECT id, name, type, {dn} AS display_name,
                ts_rank(to_tsvector('english', name), q.tsq) AS rnk
         FROM wegov_orgs, q
-        WHERE name ILIKE $1 OR "alternate_name" ILIKE $1
+        WHERE (name ILIKE $1 OR "alternate_name" ILIKE $1
+           OR {dn} ILIKE $1
            OR to_tsvector('english', name) @@ q.tsq
-           OR to_tsvector('english', "alternate_name") @@ q.tsq
+           OR to_tsvector('english', "alternate_name") @@ q.tsq){live}
         ORDER BY (name ILIKE $2) DESC, (name ILIKE $3) DESC, rnk DESC NULLS LAST, length(name)
         LIMIT $4
     """, [like, term, prefix, limit, term])
-    return [{"title": r["name"], "url": f"/o/{r['id']}-{_slug(r['name'])}",
+    return [{"title": r.get("display_name") or r["name"],
+             "url": f"/o/{r['id']}-{_slug(r['name'])}",
              "meta": r.get("type") or "Organization"} for r in rows]
 
 

@@ -6,6 +6,13 @@ import asyncio
 from decimal import Decimal
 from config import Config
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 # Bounded connection pool — prevents Postgres exhaustion under production traffic.
 # max_size caps connections from the API; min_size is the WARM BASELINE opened
 # eagerly by create_pool() at startup, before any traffic.
@@ -46,10 +53,20 @@ async def _get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
         _pool = await asyncpg.create_pool(
-            user=Config.db['user'],
-            password=Config.db['pwd'],
-            database=Config.db['dbname'],
-            host=Config.db['host'],
+            # Environment first, env.yaml only as a fallback.
+            #
+            # Why: the credential used to live in BOTH .env (compose -> container
+            # env) and api/env.yaml, and this pool read only the YAML. That meant a
+            # rotation had to edit two files in two formats and keep them in step,
+            # and env.yaml additionally carried an `addr:` DSN embedding a third
+            # copy. Reading the environment here makes the container env the single
+            # source of truth and lets the secrets come out of env.yaml entirely.
+            # Matches the precedent in setup_oce_postgres.py.
+            user=os.environ.get('POSTGRES_USER') or Config.db.get('user'),
+            password=dbcreds.password(Config.db.get('pwd') or ''),
+            database=os.environ.get('POSTGRES_DB') or Config.db.get('dbname'),
+            host=os.environ.get('POSTGRES_HOST') or Config.db.get('host'),
+            port=int(os.environ.get('POSTGRES_PORT', '5432')),
             min_size=_POOL_MIN,
             max_size=_POOL_MAX,
             command_timeout=30,

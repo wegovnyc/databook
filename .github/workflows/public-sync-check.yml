@@ -1,0 +1,103 @@
+# Monthly check for drift between databook-private and the public snapshot.
+#
+# This job deliberately does NOT push. It runs scripts/sync-public.sh in its
+# default dry-run mode, so it builds the sanitized tree, runs the secret scan
+# and reports the diff — then opens (or updates) an issue asking a human to
+# review and publish.
+#
+# Why not auto-publish: a credential pushed to a public repo is not undone by
+# deleting the commit. The regex + gitleaks gate is good enough to *block* a bad
+# sync, not good enough to be the only thing standing between a new secret and
+# the internet. The 2026-07-29 sync is the argument — the gate caught three
+# values (a live Mapbox token, a hardcoded Carto key, developer paths) that a
+# naive mirror would have published.
+name: Public Snapshot Drift
+
+on:
+  schedule:
+    - cron: '0 13 1 * *'   # 1st of the month, 13:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    name: Check public snapshot drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install gitleaks
+        run: |
+          v=8.18.4
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Dry-run the public sync
+        id: sync
+        run: |
+          set -o pipefail
+          # Dry run: builds, redacts, scans, diffs — never pushes.
+          bash scripts/sync-public.sh 2>&1 | tee /tmp/sync.log || echo "SCAN_FAILED=1" >> "$GITHUB_ENV"
+          if grep -q "No changes — public repo already matches" /tmp/sync.log; then
+            echo "drift=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=yes" >> "$GITHUB_OUTPUT"
+          fi
+          # Keep the last ~60 lines for the issue body.
+          tail -60 /tmp/sync.log | sed 's/\x1b\[[0-9;]*m//g' > /tmp/sync-summary.txt
+
+      - name: Report
+        if: steps.sync.outputs.drift == 'yes' || env.SCAN_FAILED == '1'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('/tmp/sync-summary.txt', 'utf8').slice(0, 55000);
+            const failed = process.env.SCAN_FAILED === '1';
+            const title = failed
+              ? 'Public snapshot sync BLOCKED by the secret scan'
+              : 'Public snapshot is behind databook-private';
+            const body = [
+              failed
+                ? '⚠️ The dry run **failed its secret scan**. Nothing was pushed. Resolve the findings below before syncing — a new secret may have been committed, or `scripts/sync-public.sh` may need a new redaction rule.'
+                : 'The public snapshot (`wegovnyc/databook`) has drifted from `main`. Review the diff below, then publish:',
+              '',
+              '```',
+              'bash scripts/sync-public.sh          # dry run, read the scan + diff',
+              'bash scripts/sync-public.sh --push   # publish',
+              '```',
+              '',
+              '<details><summary>Dry-run output</summary>',
+              '',
+              '```',
+              summary,
+              '```',
+              '',
+              '</details>',
+              '',
+              '_Opened automatically by `.github/workflows/public-sync-check.yml`. This job never pushes._',
+            ].join('\n');
+
+            // Reuse one issue rather than opening a new one every month.
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'public-sync',
+            });
+            if (open.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['public-sync'],
+              });
+            }

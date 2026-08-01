@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response, Header
 from modules.postgrex.asyncmodel import PostgresModelAsync
+from modules import orgfilter
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +78,15 @@ async def orgs_search(
 
     # Match full name OR acronym (alternate_name, e.g. FDNY/DOT/HPD). Rank exact
     # acronym matches, then name prefix, then shortest name.
+    # Retired orgs are merged-away duplicates; serving one is a bug (see
+    # modules/orgfilter.py).
+    live = await orgfilter.live_clause(
+        lambda sql: PostgresModelAsync.select_safe(sql, []))
     rows = await PostgresModelAsync.select_safe(
-        """
+        f"""
         SELECT id, name, type, alternate_name
         FROM wegov_orgs
-        WHERE name ILIKE $1 OR alternate_name ILIKE $1
+        WHERE (name ILIKE $1 OR alternate_name ILIKE $1){live}
         ORDER BY (UPPER(COALESCE(alternate_name, '')) = UPPER($3)) DESC,
                  (name ILIKE $2) DESC,
                  length(name) ASC

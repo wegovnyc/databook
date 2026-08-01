@@ -97,6 +97,10 @@ class ProcurementController extends Controller
             'dos' => $data['dos'] ?? null,        // NY DOS legal-entity record (null when unmatched)
             'relatedNotices' => $data['related_notices'] ?? [],
             'nycha' => $data['nycha'] ?? null,
+            // Track B: orgs in the civic register that ARE this vendor. A list,
+            // because several register rows can legitimately share one vendor —
+            // United Federation of Teachers is the union plus two bargaining units.
+            'civicOrgs' => $data['civic_orgs'] ?? [],
             'breadcrumbs' => Breadcrumbs::procurementVendor($id, $data['vendor']['name'] ?? 'Vendor')
         ]);
     }

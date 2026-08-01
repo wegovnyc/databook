@@ -38,6 +38,43 @@ class DatabookAPI
 		return json_decode($resp, true) ?? false;
 	}
 	
+	/**
+	 * Call an authenticated /admin/* endpoint SERVER-SIDE and return
+	 * [status, decoded-body].
+	 *
+	 * ⚠ Why the browser never talks to the API directly here: the credential is
+	 * a long-lived write-scoped bearer token in this app's .env. Handing it to a
+	 * page would publish it to anyone who opens devtools. So the editing UI
+	 * posts to Laravel, Laravel calls the API, and the token stays on the server.
+	 *
+	 * ⚠ Unlike req()/reqOCE() this returns the STATUS as well as the body,
+	 * because the whole point of the org-admin endpoints is that they refuse
+	 * things — a 409 on an unconfirmed rename and a 400 on an invalid type are
+	 * the feature. Collapsing them to false (as req() does) would turn every
+	 * refusal into a generic failure and hide the reason from the human.
+	 */
+	static function adminReq($uri, $method = 'get', $payload = null)
+	{
+		$opts = [
+			CURLOPT_HTTPHEADER => [
+				'Authorization: Bearer ' . config('apis.fapi_key'),
+				'Accept: application/json',
+			],
+			CURLOPT_TIMEOUT => 20,
+			CURLOPT_CONNECTTIMEOUT => 5,
+			// A 405/409 must come back as itself, not be chased or swallowed.
+			CURLOPT_FOLLOWLOCATION => 0,
+			CURLOPT_HEADER => 0,
+		];
+		$ch = Curl2::init(config('apis.fapi_entry') . $uri, $method, $opts, '',
+			$payload === null ? '' : json_encode($payload));
+		$body = curl_exec($ch);
+		$status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		if ($body === false)
+			return [0, ['detail' => 'the API could not be reached']];
+		return [$status, json_decode($body, true)];
+	}
+
 	static function url($uri)
 	{
 		return config('apis.fapi_public_entry') . $uri;

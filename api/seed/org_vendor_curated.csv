@@ -1,0 +1,21 @@
+# Curated org <-> PASSPort vendor decisions. Track B.
+#
+# Format: org_id,passport_supplier_id[,note]   — REAL quoted CSV.
+#   an id            = reviewed, this IS the vendor  -> tier `curated`, LINKS
+#   "-" (or none/null/x) = reviewed, NOT a match     -> tier `rejected`, never
+#                          returns to the review queue
+#
+# A rebuild never overwrites these rows and deletes only non-curated ones, so a
+# decision recorded here survives every future run. Version-controlled on
+# purpose: the NYCHA equivalent lived only on the box.
+#
+# Review queue + reasoning: docs/org-vendor-crosswalk-review.md
+#
+# 170100266: unambiguous — Carnegie Hall's legal entity IS The Carnegie Hall
+# Corporation. It is not in the review queue because the automatic passes
+# produced NO row for it: the shared suffix list strips CORP but not
+# CORPORATION, so the keys differ ("CARNEGIE HALL" vs "CARNEGIE HALL
+# CORPORATION") and the residual scores below the fuzzy floor. Widening the
+# suffix list to catch it would collapse "X Trust"/"X Fund"/"X Association"
+# onto "X" and invent collisions, so one curated line is the cheaper fix.
+170100266,1638062,Carnegie Hall = The Carnegie Hall Corporation (legal entity)

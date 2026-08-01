@@ -22,6 +22,11 @@ import asyncpg
 
 from config import Config
 from generate_dashboard import generate as generate_titles_dashboard
+
+try:
+    import orgfilter
+except ImportError:
+    from modules import orgfilter
 from enrich_geo_json import enrich_geo_json_hook
 from enrich_fire_data import (
     enrich_fire_causes_hook,
@@ -32,6 +37,14 @@ from enrich_fire_data import (
 from enrich_agency import derive_agency_enrichment_hook
 from enrich_vendor import derive_vendor_enrichment_hook
 from enrich_doing_business import derive_doing_business_hook
+from build_org_vendor_crosswalk import derive_org_vendor_hook
+
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
 
 
 def dedupe_columns(columns: list) -> list:
@@ -127,7 +140,11 @@ POST_INGEST_HOOKS = {
     # Doing Business (LL34) is name-matched against the vendor list, so its
     # crosswalk must be rebuilt whenever that list changes — even on the days
     # the MOCS feed itself is unchanged (it has not moved since 2025-11-21).
-    "vendors": [derive_vendor_enrichment_hook, derive_doing_business_hook],
+    # Track B: which orgs in the civic register are also PASSPort vendors. Name-
+    # matched against the vendor list, so it is rebuilt whenever that list
+    # changes — which also picks up register changes within a day.
+    "vendors": [derive_vendor_enrichment_hook, derive_doing_business_hook,
+                derive_org_vendor_hook],
 }
 
 
@@ -200,7 +217,7 @@ async def get_db_connection() -> asyncpg.Connection:
     """Create a standalone asyncpg connection for scheduler operations."""
     db_cfg = getattr(Config, 'db', {}) or {}
     db_user = os.environ.get('POSTGRES_USER', db_cfg.get('user', 'postgres'))
-    db_pass = os.environ.get('POSTGRES_PASSWORD', db_cfg.get('pwd', ''))
+    db_pass = dbcreds.password(db_cfg.get('pwd', ''))
     db_host = os.environ.get('POSTGRES_HOST', db_cfg.get('host', '127.0.0.1'))
     db_name = os.environ.get('POSTGRES_DB', db_cfg.get('dbname', 'databook'))
     return await asyncpg.connect(
@@ -1200,10 +1217,18 @@ async def rebuild_glob_stats(conn: asyncpg.Connection):
             else latest)
 
         # ── Organizations ──────────────────────────────────────
+        # ⚠ `type = 'City Agency'` alone is wrong since the OTI adoption: 240
+        # orgs were retyped onto OTI's vocabulary, taking City Agency from 167
+        # to 27, and this tile sits on the very page that broke. The vocabulary
+        # lives in modules/orgfilter.py — nowhere else.
         stats['agencies_no'] = await _safe_val(
-            conn, "SELECT count(*) FROM wegov_orgs WHERE type = 'City Agency'")
+            conn, "SELECT count(*) FROM wegov_orgs WHERE type IN ("
+                  + orgfilter.sql_type_list(orgfilter.CITY_AGENCY_TYPES)
+                  + ") AND retired_at IS NULL")
+        # Retired rows are merged-away duplicates; they are not organizations
+        # the site serves, so they must not be counted as such.
         stats['orgs_no'] = await _safe_val(
-            conn, "SELECT count(*) FROM wegov_orgs")
+            conn, "SELECT count(*) FROM wegov_orgs WHERE retired_at IS NULL")
         stats['orgs_datasets_no'] = await _safe_val(
             conn,
             "SELECT count(*) FROM dataset_registry WHERE is_active = true AND display_name IS NOT NULL")

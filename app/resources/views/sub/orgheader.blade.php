@@ -78,9 +78,41 @@
 						@endif
 					</div>
 
-					<h1 class="db-profile-title">{{ $org['name'] }}</h1>
+					{{--
+						Show NYC's official name (`display_name`, from the OTI
+						registry) and fall back to ours. ⚠ Display only — every
+						URL, the contracts.agency join and the cache keys stay on
+						$org['name'], which is why display_name exists at all.
+					--}}
+					@php $dispName = ($org['display_name'] ?? null) ?: $org['name']; @endphp
+					<h1 class="db-profile-title">{{ $dispName }}</h1>
+					@if ($dispName !== $org['name'])
+						<div class="db-profile-meta">
+							<span class="db-meta-item"><i class="bi bi-info-circle"></i>
+								Also known as {{ $org['name'] }}</span>
+						</div>
+					@endif
 
-					@if (($org['communityDistrictName'] ?? null) || ($org['cityCouncilDistrictName'] ?? null) || ($org['parent_id'] ?? null))
+					@php
+						// Track B: this org is also a PASSPort vendor. Precomputed here
+						// because a Blade directive glued to a word character is not
+						// compiled and 500s the page while `php -l` passes clean.
+						$cv = $org['civic_vendor'] ?? null;
+						$cvContracts = $cv ? (int)($cv['contracts'] ?? 0) : 0;
+						$cvAwarded = $cv ? (float)($cv['awarded'] ?? 0) : 0;
+						$cvTier = $cv ? ($cv['match']['tier'] ?? '') : '';
+						$cvLabel = $cvContracts === 1 ? 'contract' : 'contracts';
+						// Say HOW the link was made rather than presenting a name-based
+						// join as fact — same discipline as the NYCHA block.
+						$cvHow = $cvTier === 'curated'
+							? 'human-confirmed match'
+							: 'matched on name (' . $cvTier . ')';
+						$cvAmount = $cvAwarded >= 1000000
+							? '$' . number_format($cvAwarded / 1000000, 1) . 'M'
+							: '$' . number_format($cvAwarded);
+					@endphp
+
+					@if (($org['communityDistrictName'] ?? null) || ($org['cityCouncilDistrictName'] ?? null) || ($org['parent_id'] ?? null) || $cv)
 						<div class="db-profile-meta">
 							@if ($org['communityDistrictName'] ?? null)
 								<span class="db-meta-item"><i class="bi bi-geo-alt"></i> Representing
@@ -112,6 +144,15 @@
 									<a href="{{ route('orgsChartFocus', ['id' => $org['id']]) }}" class="db-icon-btn" title="View org chart" style="width:28px;height:28px;">
 										<i class="bi-diagram-3-fill"></i>
 									</a>
+								</span>
+							@endif
+							@if ($cv)
+								<span class="db-meta-item" title="{{ $cvHow }}">
+									<i class="bi bi-file-earmark-text"></i> Holds City contracts
+									<a href="{{ route('procurement.vendor', ['id' => $cv['supplier_id']]) }}">{{ $cv['vendor_name'] }}</a>
+									@if ($cvContracts)
+										<span class="db-meta">({{ number_format($cvContracts) }} {{ $cvLabel }}, {{ $cvAmount }} awarded)</span>
+									@endif
 								</span>
 							@endif
 						</div>

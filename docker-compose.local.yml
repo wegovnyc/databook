@@ -42,7 +42,25 @@ services:
       - "8581:8000" # Direct API access for debugging
     environment:
       NORMALIZER_BASE_URL: https://normalize.databook.nyc
+      # Prod runs least-privilege roles (databook_api owns the tables,
+      # databook_mcp is read-only). Local dev uses the single `postgres` role.
+      POSTGRES_USER: postgres
 
   mcp:
     ports:
       - "8582:8082" # Direct MCP access for debugging
+    environment:
+      POSTGRES_USER: postgres
+
+# ── Credentials for local development ────────────────────────────────────────
+# The base compose sources each password from a Docker secret under ./secrets/*,
+# which exists only on the deployed box (and is gitignored). Point all three at
+# one committed placeholder so a fresh clone still starts with no extra setup.
+# The value is the documented local default.
+secrets:
+  postgres_superuser_password:
+    file: ./docker/local-postgres-password
+  postgres_api_password:
+    file: ./docker/local-postgres-password
+  postgres_mcp_password:
+    file: ./docker/local-postgres-password

@@ -31,3 +31,7 @@ app/node_modules/
 .idea/
 scripts/local-seed.sql
 /data-lake/
+
+# Docker secrets: credential files, created on the box by the rotation and
+# role-split scripts. Never committed.
+secrets/

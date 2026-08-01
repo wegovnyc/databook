@@ -111,7 +111,13 @@
 		var table = null
 
 		function orgTypeBadge(type) {
-			var map = {'City Agency':'navy','City Fund':'success','Community Board':'info','Economic Development Organization':'info','Elected Office':'success','State Agency':'info'};
+			var map = {'City Agency':'navy','City Fund':'success','Community Board':'info','Economic Development Organization':'info','Elected Office':'success','State Agency':'info',
+				// OTI's vocabulary, adopted 2026-07-30 — without these, every
+				// retyped agency falls through to the neutral badge.
+				'Mayoral Agency':'navy','Mayoral Office':'navy','Division':'navy',
+				'Advisory or Regulatory Organization':'info','Pension Fund':'success',
+				'Public Benefit or Development Organization':'info',
+				'State Government Agency':'info','Nonprofit Organization':'neutral'};
 			return map[type] || 'neutral';
 		}
 		function orgTypeIcon(type) {
@@ -203,15 +209,17 @@
                 ],
 
 				initComplete: function () {
-					// Filter to City Agency type only — Type is now column index 1
-					this.api().columns([1]).every(function () {
-						var column = this;
-						setTimeout(function(){
-							column
-								.search('^City Agency$', true, false)
-								.draw();
-						}, 700);
-					});
+					// NOTE: no type filter here on purpose. This page is fed by
+					// /get/orgs/agencies, which already returns exactly the city
+					// agency types (api/modules/orgfilter.py::CITY_AGENCY_TYPES).
+					//
+					// ⚠ It used to narrow the full directory itself with
+					// .search('^City Agency$', true, false). That hardcoded one
+					// literal type string in JavaScript, so when the OTI adoption
+					// retyped 240 orgs onto OTI's vocabulary the page silently
+					// dropped from ~167 rows to 28 — no error anywhere. Do not
+					// reintroduce a client-side type filter; change the server's
+					// vocabulary instead.
 
 					// Tags filter — Tags is now column index 2
 					this.api().columns([2]).every(function () {

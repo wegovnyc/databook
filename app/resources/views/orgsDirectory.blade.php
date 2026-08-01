@@ -129,7 +129,13 @@
 
 		// Type → badge color + icon for cards
 		function orgTypeBadge(type) {
-			var map = {'City Agency':'navy','City Fund':'success','Community Board':'info','Economic Development Organization':'info','Elected Office':'success','State Agency':'info'};
+			var map = {'City Agency':'navy','City Fund':'success','Community Board':'info','Economic Development Organization':'info','Elected Office':'success','State Agency':'info',
+				// OTI's vocabulary, adopted 2026-07-30 — without these, every
+				// retyped agency falls through to the neutral badge.
+				'Mayoral Agency':'navy','Mayoral Office':'navy','Division':'navy',
+				'Advisory or Regulatory Organization':'info','Pension Fund':'success',
+				'Public Benefit or Development Organization':'info',
+				'State Government Agency':'info','Nonprofit Organization':'neutral'};
 			return map[type] || 'neutral';
 		}
 		function orgTypeIcon(type) {

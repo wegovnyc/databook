@@ -22,6 +22,13 @@ import asyncpg
 sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
 from config import Config
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 # CPDB Socrata GeoJSON endpoints
 POINTS_ID = "h2ic-zdws"
 POLYGONS_ID = "9jkp-n57r"
@@ -224,7 +231,7 @@ async def enrich(apply: bool = False):
     # Connect to database
     Config.load(file='env.yaml')
     db_user = os.environ.get('POSTGRES_USER', Config.db.get('user', 'postgres'))
-    db_pass = os.environ.get('POSTGRES_PASSWORD', Config.db.get('pwd', 'password'))
+    db_pass = dbcreds.password(Config.db.get('pwd', 'password'))
     db_host = os.environ.get('POSTGRES_HOST', Config.db.get('host', '127.0.0.1'))
     db_name = os.environ.get('POSTGRES_DB', Config.db.get('dbname', 'databook'))
     dsn = f"postgresql://{db_user}:{db_pass}@{db_host}:5432/{db_name}"

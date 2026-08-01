@@ -33,6 +33,13 @@ from collections import defaultdict
 import duckdb
 import asyncpg
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 DATA = os.environ.get("DATA_LAKE_PATH", "/data")
 _SUFFIX = re.compile(r"\b(INC|LLC|LLP|LP|CORP|CO|LTD|COMPANY|THE|INCORPORATED|GROUP|USA)\b")
 
@@ -213,7 +220,7 @@ async def main():
     conn = await asyncpg.connect(
         host=os.environ.get("POSTGRES_HOST", "postgres"),
         user=os.environ.get("POSTGRES_USER", "postgres"),
-        password=os.environ.get("POSTGRES_PASSWORD", ""),
+        password=dbcreds.password(),
         database=os.environ.get("POSTGRES_DB", "databook"),
     )
     try:

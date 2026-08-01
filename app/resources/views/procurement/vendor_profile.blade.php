@@ -127,6 +127,7 @@
                     <a href="#section-contracts">Contracts <span class="db-badge db-badge-neutral">{{ count($contracts) }}</span></a>
                     <a href="#section-transactions">Transactions</a>
                     @if(!empty($nycha))<a href="#section-nycha">NYCHA Activity</a>@endif
+                    @if(!empty($civicOrgs))<a href="#section-civic">Civic Record</a>@endif
                     @if(count($relatedNotices ?? []) > 0)<a href="#notices">City Record Notices <span class="db-badge db-badge-neutral">{{ count($relatedNotices) }}</span></a>@endif
                 </nav>
             </div>
@@ -609,6 +610,49 @@
                      NYCHA is a separate authority: its contracts/payments live in the Checkbook
                      _NYCHA feeds, not the City tables above, so they're rolled up here and
                      linked into the NYCHA explorers on the org profile. --}}
+                @if (!empty($civicOrgs))
+                    @php
+                        // Track B. Precomputed: a Blade directive glued to a word
+                        // character is not compiled and 500s the page while
+                        // `php -l` passes clean.
+                        $civicOne = count($civicOrgs) === 1;
+                        $civicHeading = $civicOne ? 'Civic Record' : 'Civic Records';
+                    @endphp
+                    <div id="section-civic" class="db-anchor mb-5">
+                        <div class="d-flex align-items-center mb-3" style="gap: var(--db-space-15);">
+                            <h4 class="mb-0">{{ $civicHeading }}</h4>
+                            <span class="db-badge db-badge-neutral">Databook org register</span>
+                        </div>
+                        <div class="db-card"><div class="db-card-body">
+                            <p class="text-muted" style="font-size: var(--db-text-sm);">
+                                This vendor is also tracked as a civic actor in NYC governance —
+                                {{ $civicOne ? 'an organization' : 'organizations' }} with
+                                {{ $civicOne ? 'its' : 'their' }} own profile covering leadership,
+                                notices and city relationships beyond procurement.
+                                Matched by name, so the link is a judgement rather than an identifier.
+                            </p>
+                            <ul class="list-unstyled mb-0">
+                                @foreach ($civicOrgs as $co)
+                                    @php
+                                        $coName = ($co['display_name'] ?? null) ?: ($co['org_name'] ?? '');
+                                        $coTier = $co['match_tier'] ?? '';
+                                        $coHow = $coTier === 'curated'
+                                            ? 'human-confirmed'
+                                            : 'matched on name (' . $coTier . ')';
+                                    @endphp
+                                    <li class="mb-2">
+                                        <a href="{{ route('orgProfile', ['id' => $co['org_id'], 'orgslug' => Str::slug($co['org_name'] ?? '', '-')]) }}">{{ $coName }}</a>
+                                        @if (!empty($co['org_type']))
+                                            <span class="db-badge db-badge-neutral">{{ $co['org_type'] }}</span>
+                                        @endif
+                                        <span class="db-meta">{{ $coHow }}</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        </div></div>
+                    </div>
+                @endif
+
                 @if(!empty($nycha))
                 @php
                     $nychaNames = $nycha['names'] ?? [];

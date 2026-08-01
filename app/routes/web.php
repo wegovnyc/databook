@@ -43,6 +43,26 @@ Route::get('/about/data', [\App\Http\Controllers\Admin::class, 'dataHealth'])->n
 Route::get('/about/tables', [\App\Http\Controllers\Admin::class, 'dataTables'])->name('about.tables');
 Route::get('/about/log', [\App\Http\Controllers\Admin::class, 'ingestionLog'])->name('about.log');
 
+// ── the org register's editing UI (Phase 5) ─────────────────────────────────
+// ⚠ GATED BY NGINX BASIC AUTH on /admin/ at the ORIGIN, not by Laravel: this app
+// has no user system to hang a role on, and a Cloudflare-layer policy would be
+// bypassable (task dda13bf3 — the origin answers direct connections). See
+// scripts/org-admin-auth-setup.sh. Removing that gate turns these into an
+// unauthenticated write surface onto the register.
+Route::get('/admin/orgs', [\App\Http\Controllers\OrgAdmin::class, 'index'])->name('admin.orgs');
+// ⚠ {id} is constrained to digits, or this route would swallow every literal
+// path under /admin/orgs/ — `/admin/orgs/vocabulary` would arrive as id
+// "vocabulary", cast to 0, and 404 from the API for a confusing reason.
+Route::get('/admin/orgs/{id}', [\App\Http\Controllers\OrgAdmin::class, 'edit'])
+    ->where('id', '[0-9]+')->name('admin.orgs.edit');
+Route::post('/admin/orgs', [\App\Http\Controllers\OrgAdmin::class, 'create'])->name('admin.orgs.create');
+Route::patch('/admin/orgs/{id}', [\App\Http\Controllers\OrgAdmin::class, 'save'])
+    ->where('id', '[0-9]+')->name('admin.orgs.save');
+Route::post('/admin/orgs/{id}/retire', [\App\Http\Controllers\OrgAdmin::class, 'retire'])
+    ->where('id', '[0-9]+')->name('admin.orgs.retire');
+Route::post('/admin/orgs/{id}/unretire', [\App\Http\Controllers\OrgAdmin::class, 'unretire'])
+    ->where('id', '[0-9]+')->name('admin.orgs.unretire');
+
 Route::get('/styleguide', function () {
     return view('styleguide', ['pagetitle' => 'Styleguide - Databook.nyc']);
 });

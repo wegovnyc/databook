@@ -48,6 +48,12 @@ jobs:
           # newsletter service (private submodule, not started here) declares an
           # env_file compose still validates — stub it.
           mkdir -p databook_newsletter/repo && touch databook_newsletter/repo/.env
+          # Production splits Postgres into least-privilege roles, so the compose
+          # file demands the per-role usernames explicitly rather than defaulting
+          # to the superuser. Compose interpolates the BASE file before merging
+          # docker-compose.local.yml, so an override cannot supply these — they
+          # have to exist as variables. Mirrors .env.example.
+          cp .env.example .env
       - name: Build + boot stack (local compose override)
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis api app nginx

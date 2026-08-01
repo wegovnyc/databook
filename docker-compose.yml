@@ -32,8 +32,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_HOST: postgres
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_USER: ${API_POSTGRES_USER:?set API_POSTGRES_USER in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_api_password
       POSTGRES_DB: ${POSTGRES_DB:-databook}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       SENTRY_DSN: ${SENTRY_DSN:-}
@@ -80,6 +80,8 @@ services:
       - 127.0.0.11
       - 8.8.8.8
       - 1.1.1.1
+    secrets:
+      - postgres_api_password
 
   mcp:
     build:
@@ -90,8 +92,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_HOST: postgres
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_USER: ${MCP_POSTGRES_USER:?set MCP_POSTGRES_USER in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_mcp_password
       POSTGRES_DB: ${POSTGRES_DB:-databook}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8082/admin/logs" ]
@@ -112,6 +114,9 @@ services:
 
   # Newsletter service moved to AWS App Runner (Feb 2026)
   # URL: https://sgkenm8rum.us-east-1.awsapprunner.com
+    secrets:
+      - postgres_mcp_password
+
   newsletter:
     build:
       context: ./databook_newsletter/repo
@@ -174,7 +179,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-databook}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 15s
@@ -185,6 +190,8 @@ services:
       - tmp-data:/var/tmp
     networks:
       - databook-network
+    secrets:
+      - postgres_superuser_password
 
   redis:
     image: redis:alpine
@@ -205,3 +212,16 @@ volumes:
   redis-data:
   tmp-data:
   shared_data:
+
+# Credentials as files rather than environment variables: the value lands at
+# /run/secrets/<name> instead of appearing in `docker inspect`, in
+# `docker compose config` output, and in /proc/<pid>/environ for every process
+# in the container. Created (0600) by the rotation and role-split scripts;
+# secrets/ is gitignored.
+secrets:
+  postgres_superuser_password:
+    file: ./secrets/postgres_superuser_password
+  postgres_api_password:
+    file: ./secrets/postgres_api_password
+  postgres_mcp_password:
+    file: ./secrets/postgres_mcp_password

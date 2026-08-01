@@ -29,6 +29,13 @@ from cachetools import TTLCache
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 # Configure logging for detailed MCP request tracking
 logging.basicConfig(
     level=logging.INFO,
@@ -196,7 +203,7 @@ def get_db_config():
         "port": int(os.getenv("POSTGRES_PORT", "5432")),
         "database": os.getenv("POSTGRES_DB", "databook"),
         "user": os.getenv("POSTGRES_USER", "postgres"),
-        "password": os.getenv("POSTGRES_PASSWORD", ""),
+        "password": dbcreds.password(),
     }
 
 
@@ -211,6 +218,38 @@ async def get_pool() -> asyncpg.Pool:
             **config
         )
     return _pool
+
+
+async def _live_orgs(prefix: str = "AND", alias: str = "") -> str:
+    """`AND retired_at IS NULL` for org queries — see modules/orgfilter.py.
+
+    Retirement is additive (the row stays), so an unfiltered org query returns
+    merged-away duplicates. Measured 2026-07-30: search_organizations returned
+    both the live and the retired `Public Design Commission`.
+    """
+    try:
+        from modules import orgfilter
+    except ImportError:
+        import orgfilter
+    return await orgfilter.live_clause(query, prefix, alias)
+
+
+async def _parent_join(child: str = "o", parent: str = "par") -> str:
+    """The LEFT JOIN that resolves an org's parent — see modules/orgfilter.py.
+
+    ⚠ THE BUG THIS FIXES. Both org tools used to select `parent_name` straight
+    off `wegov_orgs`, where it is a **0%-populated dead column** shadowed by a
+    computed alias of the same name in main.py's profile query. So the website
+    showed a parent and these tools reported none — for as long as they have
+    existed. Measured 2026-07-31: `get_organization_profile(170100340)` returned
+    no parent for `Office of Community Hiring`, whose parent is
+    `Office of Workforce Development`.
+    """
+    try:
+        from modules import orgfilter
+    except ImportError:
+        import orgfilter
+    return await orgfilter.parent_join(query, child, parent)
 
 
 async def query(sql: str, *args):
@@ -350,12 +389,14 @@ async def search_organizations(query_text: str, limit: int = 20) -> str:
     
     rows = await query(
         """
-        SELECT id, name, type, alternate_name AS acronym, parent_name
-        FROM wegov_orgs
-        WHERE name ILIKE $1 OR alternate_name ILIKE $1
-        ORDER BY name
+        SELECT o.id, o.name, o.type, o.alternate_name AS acronym,
+               par.name AS parent_name
+        FROM wegov_orgs o{pjoin}
+        WHERE (o.name ILIKE $1 OR o.alternate_name ILIKE $1){live}
+        ORDER BY o.name
         LIMIT $2
-        """,
+        """.format(pjoin=await _parent_join(),
+                   live=await _live_orgs(alias="o")),
         f"%{query_text}%", limit
     )
     
@@ -383,19 +424,36 @@ async def get_organization_profile(org_id: int) -> str:
     Returns:
         Complete organization profile with stats
     """
+    # ⚠ Deliberately NOT filtered by retired_at: a lookup by id is a permalink,
+    # and answering "not found" for an org that plainly exists is worse than
+    # answering with a redirect. The retirement is surfaced below instead.
+    # `merged_into` is selected only when the column exists (see _live_orgs).
+    _retire_cols = (", o.retired_at, o.merged_into" if await _live_orgs() else
+                    ", NULL::timestamptz AS retired_at, NULL::int AS merged_into")
     org = await query_one(
-        """
-        SELECT id, name, type, alternate_name AS acronym, parent_name,
-               url AS website, main_address AS address, main_phone AS phone,
-               description
-        FROM wegov_orgs
-        WHERE id = $1
+        f"""
+        SELECT o.id, o.name, o.type, o.alternate_name AS acronym,
+               par.name AS parent_name,
+               o.url AS website, o.main_address AS address,
+               o.main_phone AS phone, o.description{_retire_cols}
+        FROM wegov_orgs o{await _parent_join()}
+        WHERE o.id = $1
         """,
         org_id
     )
-    
+
     if not org:
         return f"Organization with ID {org_id} not found"
+
+    if org.get("retired_at"):
+        successor = await query_one(
+            "SELECT id, name FROM wegov_orgs WHERE id = $1", org["merged_into"]
+        ) if org.get("merged_into") else None
+        note = (f" It was merged into **{successor['name']}** "
+                f"(ID: {successor['id']}), which is the record to use."
+                if successor else "")
+        return (f"⚠ **{org['name']}** (ID: {org_id}) is a RETIRED duplicate "
+                f"record and is no longer served.{note}")
     
     # Get headcount stats
     headcount = await query_one(
@@ -437,6 +495,7 @@ async def get_organization_profile(org_id: int) -> str:
 **Basic Info:**
 - Type: {org['type']}
 - ID: {org['id']}
+{f"- Part of: {org['parent_name']}" if org.get('parent_name') else "- Part of: N/A"}
 - Website: {org.get('website') or 'N/A'}
 - Phone: {org.get('phone') or 'N/A'}
 

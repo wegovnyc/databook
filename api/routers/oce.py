@@ -1149,6 +1149,32 @@ async def get_vendor(id: str):
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[oce] NYCHA vendor activity lookup failed for {id}: {exc}")
 
+    # Is this vendor also a civic actor in the org register? (Track B.) Measured
+    # 2026-07-31: 52 of 1,248 orgs are also PASSPort vendors — cultural
+    # institutions, BIDs, service-delivery nonprofits, political consultancies.
+    #
+    # ⚠ Joined on `passport_supplier_id`, which by construction holds ONLY links
+    # we stand behind; unreviewed candidates live in `candidate_supplier_id` and
+    # therefore cannot leak through this query. That is the #146 lesson made
+    # structural rather than left to every consumer to remember.
+    #
+    # ⚠ MULTIPLE orgs may legitimately share one vendor — `United Federation of
+    # Teachers` is three register rows (the union plus two bargaining units), all
+    # supplier 1713785 — so this is a LIST, not a single value.
+    civic = []
+    try:
+        civic = await PostgresModelAsync.select_safe(
+            "SELECT x.org_id, x.org_name, x.match_tier, x.match_score, "
+            "       w.type AS org_type, w.display_name "
+            "FROM org_vendor_crosswalk x "
+            "JOIN wegov_orgs w ON w.id = x.org_id "
+            "WHERE x.passport_supplier_id = $1 AND w.retired_at IS NULL "
+            "ORDER BY x.org_name", [id]) or []
+    except Exception as exc:  # noqa: BLE001
+        # The crosswalk is optional (fresh envs) and a hiccup must never break
+        # the vendor profile.
+        logger.warning(f"[oce] org crosswalk lookup failed for {id}: {exc}")
+
     return {
         "vendor": vendor,
         "contracts": contracts or [],
@@ -1158,7 +1184,8 @@ async def get_vendor(id: str):
         "doing_business": doing_business,
         "dos": dos,
         "related_notices": related_notices,
-        "nycha": nycha
+        "nycha": nycha,
+        "civic_orgs": civic
     }
 
 
@@ -2899,6 +2926,18 @@ async def get_digital_reform_all(
 # Agencies Endpoints
 # ============================================================================
 
+async def _live_orgs(prefix: str = "AND", alias: str = "") -> str:
+    """`AND retired_at IS NULL` for org lookups — see modules/orgfilter.py.
+
+    Without it, `contracts.agency` could resolve to a retired duplicate: both
+    `Public Design Commission` rows share a name, and only the id ordering kept
+    the live one winning. That is luck, not logic.
+    """
+    from modules import orgfilter
+    return await orgfilter.live_clause(
+        lambda sql: PostgresModelAsync.select_safe(sql, []), prefix, alias)
+
+
 async def _resolve_org_id(agency_name: Optional[str]):
     """Resolve a contracts.agency name to a wegov_orgs id via an EXACT normalized
     (upper/trim) match on name or alternate_name. Deliberately conservative — a
@@ -2910,11 +2949,11 @@ async def _resolve_org_id(agency_name: Optional[str]):
     rows = await PostgresModelAsync.select_safe(
         """
         SELECT id FROM wegov_orgs
-        WHERE UPPER(TRIM(name)) = UPPER(TRIM($1))
-           OR UPPER(TRIM(COALESCE("alternate_name", ''))) = UPPER(TRIM($1))
+        WHERE (UPPER(TRIM(name)) = UPPER(TRIM($1))
+           OR UPPER(TRIM(COALESCE("alternate_name", ''))) = UPPER(TRIM($1))){live}
         ORDER BY id
         LIMIT 1
-        """,
+        """.format(live=await _live_orgs()),
         [agency_name],
     )
     return rows[0]["id"] if rows else None
@@ -2940,13 +2979,14 @@ async def list_agencies(
             COUNT(DISTINCT c.ctr_id) as contract_count,
             COALESCE(SUM(c.award_amount), 0) as total_value,
             (SELECT o.id FROM wegov_orgs o
-              WHERE UPPER(TRIM(o.name)) = UPPER(TRIM(c.agency))
-                 OR UPPER(TRIM(COALESCE(o."alternate_name", ''))) = UPPER(TRIM(c.agency))
+              WHERE (UPPER(TRIM(o.name)) = UPPER(TRIM(c.agency))
+                 OR UPPER(TRIM(COALESCE(o."alternate_name", ''))) = UPPER(TRIM(c.agency)))
+                 {live_o}
               ORDER BY o.id LIMIT 1) as org_id
         FROM contracts c
         WHERE c.agency IS NOT NULL AND c.agency != ''
-    """
-    
+    """.replace("{live_o}", await _live_orgs(alias="o"))
+
     if q:
         base_query += f" AND LOWER(c.agency) LIKE '%{q.lower()}%'"
     
@@ -3005,6 +3045,61 @@ async def list_agencies(
     }
 
 
+
+
+@router.get("/org/vendor-activity")
+async def get_org_vendor_activity(org_id: int = Query(..., description="wegov_orgs.id")):
+    """Does this org also hold City contracts, as a PASSPort vendor? (Track B.)
+
+    Deliberately a SEPARATE endpoint rather than extra joins on
+    /get/orgs/profile/{id}: that query already carries the Greenbook enrichment
+    behind one try/except, so a missing table here would drop THAT too and
+    silently strip agency heads and addresses from every org page. Small blast
+    radius beats a tidy single query.
+
+    ⚠ Contracts are counted by `vendor_name` EXACT equality — the same predicate
+    `get_vendor` uses (`WHERE vendor_name = $1`). If this normalized instead, the
+    figures on the org page and the vendor page would disagree, and there would
+    be no way to tell which was right.
+
+    ⚠ Only `passport_supplier_id` is read, never `candidate_supplier_id`: an
+    unreviewed match must not be able to publish itself as fact.
+    """
+    try:
+        link = await PostgresModelAsync.select_safe(
+            "SELECT passport_supplier_id, vendor_name, match_tier, match_score, "
+            "       matched_variant "
+            "FROM org_vendor_crosswalk "
+            "WHERE org_id = $1 AND passport_supplier_id IS NOT NULL", [org_id])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[oce] org vendor-activity lookup failed for {org_id}: {exc}")
+        return {"available": False, "linked": False}
+    if not link:
+        return {"available": True, "linked": False}
+
+    row = link[0]
+    stats = await PostgresModelAsync.select_safe(
+        "SELECT count(*) AS n, "
+        "       sum(COALESCE(award_amount, 0)) AS awarded, "
+        "       sum(COALESCE(current_amount, 0)) AS current_total, "
+        "       max(end_date) AS latest_end "
+        "FROM contracts WHERE vendor_name = $1", [row["vendor_name"]])
+    st = (stats or [{}])[0]
+    return {
+        "available": True,
+        "linked": True,
+        "supplier_id": row["passport_supplier_id"],
+        "vendor_name": row["vendor_name"],
+        # Surface HOW the link was made, so a name-based join is auditable
+        # rather than presented as fact — the same discipline as the NYCHA block.
+        "match": {"tier": row["match_tier"],
+                  "score": float(row["match_score"]) if row["match_score"] is not None else None,
+                  "matched_on": row["matched_variant"]},
+        "contracts": int(st.get("n") or 0),
+        "awarded": float(st.get("awarded") or 0),
+        "current_amount": float(st.get("current_total") or 0),
+        "latest_end": st.get("latest_end"),
+    }
 
 
 @router.get("/agency/summary")

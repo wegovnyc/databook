@@ -108,7 +108,13 @@
 		var table = null
 
 		function orgTypeBadge(type) {
-			var map = {'City Agency':'navy','City Fund':'success','Community Board':'info','Economic Development Organization':'info','Elected Office':'success','State Agency':'info'};
+			var map = {'City Agency':'navy','City Fund':'success','Community Board':'info','Economic Development Organization':'info','Elected Office':'success','State Agency':'info',
+				// OTI's vocabulary, adopted 2026-07-30 — without these, every
+				// retyped agency falls through to the neutral badge.
+				'Mayoral Agency':'navy','Mayoral Office':'navy','Division':'navy',
+				'Advisory or Regulatory Organization':'info','Pension Fund':'success',
+				'Public Benefit or Development Organization':'info',
+				'State Government Agency':'info','Nonprofit Organization':'neutral'};
 			return map[type] || 'neutral';
 		}
 		function orgTypeIcon(type) {
@@ -209,8 +215,12 @@
 						return '<a href="/organization/' + r['id'] + '">' + r['name'] + '</a>'
 					}},
                     {data: function (r) {
+						// Since the OTI registry adoption, `type` also carries OTI's
+						// vocabulary (Mayoral Office, Division, ...). An unmapped
+						// type used to yield `background-color: undefined`, so the
+						// badge rendered with no background — hence the fallback.
 						const cc = {'City Agency': '#9abe0c', 'City Fund': '#18a558', 'Community Board': '#74bdcb', 'Economic Development Organization': '#a881c2', 'Elected Office': '#3e7864', 'State Agency': '#b1d4e0'}
-						return '<span class="badge" style="background-color:' + cc[r['type']] + '">'+ r['type'] + '</span>'
+						return '<span class="badge" style="background-color:' + (cc[r['type']] || '#6c757d') + '">'+ (r['type'] || 'Organization') + '</span>'
 					}},
                     {data: function (r) {
 						if (!r['tags'])

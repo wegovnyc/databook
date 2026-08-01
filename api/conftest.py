@@ -73,6 +73,32 @@ sys.modules.setdefault("modules.duckpool", _duckpool)
 # duckpool` resolves to the real module instead of a MagicMock attribute.
 _mock_autoload.duckpool = _duckpool
 
+# modules.orgfilter is NOT mocked either, for the same reason: pure stdlib
+# (logging only — see modules/orgfilter.py) and its real behaviour IS the thing
+# under test. It decides whether `AND retired_at IS NULL` is appended to every
+# org query; get that wrong and org search silently returns nothing instead of
+# erroring, so a MagicMock standing in for it would hide the very bug the tests
+# exist to catch.
+_orgfilter_spec = _ilu.spec_from_file_location(
+    "modules.orgfilter", os.path.join(_api_dir, "modules", "orgfilter.py")
+)
+_orgfilter = _ilu.module_from_spec(_orgfilter_spec)
+_orgfilter_spec.loader.exec_module(_orgfilter)
+sys.modules.setdefault("modules.orgfilter", _orgfilter)
+_mock_autoload.orgfilter = _orgfilter
+
+# modules.orgcore is NOT mocked either: pure stdlib (collections only) and its
+# real behaviour is under test — it assembles the normalizer's matching
+# dictionary, where a MagicMock would happily "emit" a feed that orphans 2,588
+# manual match rows.
+_orgcore_spec = _ilu.spec_from_file_location(
+    "modules.orgcore", os.path.join(_api_dir, "modules", "orgcore.py")
+)
+_orgcore = _ilu.module_from_spec(_orgcore_spec)
+_orgcore_spec.loader.exec_module(_orgcore)
+sys.modules.setdefault("modules.orgcore", _orgcore)
+_mock_autoload.orgcore = _orgcore
+
 # Now import the app — all dependency chains are short-circuited.
 from main import app  # noqa: E402
 

@@ -25,12 +25,13 @@ Run it in an isolated container — the api image already has duckdb + asyncpg:
 
     docker run --rm -m 4g --network databook_databook-network \
       -v /opt/nycdb/db:/nycdb:ro -w /app \
-      -e POSTGRES_HOST -e POSTGRES_USER -e POSTGRES_PASSWORD -e POSTGRES_DB \
+      -v /path/to/secrets/postgres_api_password:/run/secrets/postgres_api_password:ro \
+      -e POSTGRES_HOST -e POSTGRES_USER -e POSTGRES_DB \
+      -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_api_password \
       databook-api python build_dos_crosswalk.py
 
-(pass the POSTGRES_* values through from the environment rather than typing
-them on the command line; scripts/dos-crosswalk-refresh.sh reads them from the
-running api container.)
+(the password is passed by PATH, never as a value on the command line;
+scripts/dos-crosswalk-refresh.sh wires this up and is what cron runs.)
 
 Cadence: nycdb refreshes the registry monthly (cron, 1st at 08:30 UTC), so this
 is scheduled just after it. It is NOT a post-ingest hook on `vendors`, because
@@ -79,6 +80,13 @@ from datetime import datetime, timezone
 
 import asyncpg
 import duckdb
+
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
 
 NYCDB_PATH = os.environ.get("NYCDB_PATH", "/nycdb/nycdb.duckdb")
 
@@ -137,7 +145,7 @@ async def main():
     pg = await asyncpg.connect(
         host=os.environ.get("POSTGRES_HOST", "postgres"),
         user=os.environ.get("POSTGRES_USER", "postgres"),
-        password=os.environ.get("POSTGRES_PASSWORD", ""),
+        password=dbcreds.password(),
         database=os.environ.get("POSTGRES_DB", "databook"),
     )
     try:

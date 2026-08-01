@@ -20,6 +20,8 @@ from postgrex import CsvDataset
 #from pydantic import BaseModel
 from postgrex import PostgresModelAsync
 from modules import duckpool
+from modules import orgcore
+from modules import orgfilter
 from subprocess import Popen
 from routers.oce import router as oce_router
 from routers.budget_revenue import router as budget_revenue_router
@@ -28,6 +30,7 @@ from routers.nycha import router as nycha_router
 from routers.data_pipeline import router as pipeline_router
 from routers.public_v1 import router as public_v1_router
 from routers.search import router as search_router
+from routers.org_admin import router as org_admin_router
 
 # Error tracking: enabled only when SENTRY_DSN is set in the environment,
 # so local dev and tests run without a Sentry account configured.
@@ -111,6 +114,10 @@ app.include_router(budget_revenue_router)
 app.include_router(payroll_router)
 app.include_router(nycha_router)
 app.include_router(pipeline_router)
+# Phase 5 — the org register's editing surface. Every route is gated by
+# routers/org_admin.require_editor; see that module for why it authorises on the
+# user row's scope rather than the token's.
+app.include_router(org_admin_router)
 
 
 @app.on_event("startup")
@@ -302,22 +309,118 @@ async def get_dataset_profile_by_name(name:str):
 
 # ================ orgs ================
 
+# Retired org rows must not be served — see modules/orgfilter.py for why this is
+# a probed, cached helper rather than an inline `AND retired_at IS NULL`.
+async def _orgs_live(prefix: str = 'AND') -> str:
+    return await orgfilter.live_clause(select, prefix)
+
+
 @app.get('/get/orgs/chart', tags=['Organizations'])
 async def get_organizations_for_building_chart():
-    return await select('SELECT * FROM wegov_orgs WHERE "type" IN (\'City Agency\', \'Elected Office\', \'Boards and Comissions\', \'Classification\', \'Community Board\', \'Official\') ORDER BY name')
+    """Candidates for the org chart, carrying BOTH on-chart opinions.
+
+    Type selects the candidates (including the `Classification` / `Official`
+    scaffolding nodes). `wegov_orgs.in_org_chart` is OUR editorial flag and is
+    applied here — `IS NOT FALSE`, not `IS TRUE`, so an org we have no opinion
+    about stays on the chart exactly as it did before the flag existed.
+
+    OTI's separate opinion rides along as `oti_in_org_chart` rather than being
+    applied, because the two chart views differ only in whether they honour it:
+
+        Databook view (default)  our exclusions only
+        NYC/OTI view             additionally drop oti_in_org_chart = 'false'
+
+    Conflating the two in one column is what made the second view impossible
+    the first time round.
+    """
+    # Every chart row carries `parent_org_id`, whichever mechanism resolved it:
+    # once the FK exists `org.*` supplies it, and before then the legacy
+    # child_of/airtable_id join supplies it under the same name. That keeps the
+    # PHP builder (App\Custom\OrgChart) on ONE code path — a conditional there
+    # is invisible to `php -l` and only a rendered page would catch it.
+    par_sel, par_join = await orgfilter.parent_id_projection(select)
+    base = ('SELECT org.*' + par_sel + '{enr} FROM wegov_orgs org' + par_join
+            + '{join} WHERE org."type" IN ('
+            + orgfilter.sql_type_list(orgfilter.CHART_TYPES) + ')'
+            + (await _orgs_live()).replace('retired_at', 'org.retired_at')
+            + (await orgfilter.in_chart_clause(select)).replace(
+                'in_org_chart', 'org.in_org_chart')
+            + ' ORDER BY org.name')
+    try:
+        return await select(base.format(
+            enr=', enr.in_org_chart AS oti_in_org_chart',
+            join=' LEFT JOIN nyc_org_enrichment enr ON enr.org_id = org.id'))
+    except Exception:
+        # A database without nyc_org_enrichment still gets a working chart —
+        # it just cannot offer the NYC/OTI view.
+        return await select(base.format(enr='', join=''))
 
 @app.get('/get/orgs/directory', tags=['Organizations'])
 async def get_organizations_directory():
-    return await select('SELECT * FROM wegov_orgs WHERE "type" IN (\'City Agency\', \'City Fund\', \'Community Board\', \'Economic Development Organization\', \'Elected Office\', \'State Agency\') ORDER BY name')
+    return await select('SELECT * FROM wegov_orgs WHERE "type" IN ('
+                        + orgfilter.sql_type_list(orgfilter.DIRECTORY_TYPES) + ')'
+                        + await _orgs_live() + ' ORDER BY name')
+
+@app.get('/get/orgs/agencies', tags=['Organizations'])
+async def get_city_agencies():
+    """City-level agencies, for /organizations/agencies.
+
+    The page used to take /get/orgs/directory and narrow it client-side with a
+    DataTables regex on the literal string 'City Agency'. That broke silently
+    when the OTI adoption retyped 240 orgs (167 -> 27). The type vocabulary
+    belongs in exactly one place — see modules/orgfilter.py.
+    """
+    return await select('SELECT * FROM wegov_orgs WHERE "type" IN ('
+                        + orgfilter.sql_type_list(orgfilter.CITY_AGENCY_TYPES) + ')'
+                        + await _orgs_live() + ' ORDER BY name')
+
+
+@app.get('/get/orgs/core', tags=['Organizations'])
+async def get_orgs_core_feed(report: int = 0):
+    """The normalizer's `orgs` matching dictionary, derived from the register.
+
+    One row per NAME VARIANT ({"name", "id"}), assembled by modules/orgcore.py
+    — read its docstring before changing anything here; the collision policy
+    and the alias table are what keep 2,588 manual match rows resolving.
+
+    Returns a BARE JSON list (not the {"rows": ...} wrapper): the consumer is
+    the normalizer's `url:` core-dataset source (`core_datasets.py`), which
+    expects a list. `?report=1` returns the assembly diagnostics instead —
+    what was omitted and why.
+    """
+    cols = {r['column_name'] for r in await PostgresModelAsync.select_safe(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'wegov_orgs'")}
+    wanted = [c for c in ('id', 'name', 'alternate_name', 'display_name',
+                          'type', 'retired_at', 'merged_into') if c in cols]
+    org_rows = await PostgresModelAsync.select_safe(
+        'SELECT ' + ', '.join(f'"{c}"' for c in wanted) + ' FROM wegov_orgs')
+    try:
+        alias_rows = await PostgresModelAsync.select_safe(
+            'SELECT name, org_id FROM org_core_aliases')
+    except asyncpg.exceptions.UndefinedTableError:
+        # A database that has not run seed_org_core_aliases.py serves the
+        # register-derived feed alone. The pre-flight (--check) still gates
+        # any refresh against it, so this cannot silently drop curation.
+        alias_rows = []
+    feed, diag = orgcore.build_core_feed(org_rows, alias_rows)
+    return JSONResponse(diag if report else feed)
+
 
 @app.get('/get/orgs/all', tags=['Organizations'])
 async def get_organizations_full_list():
-    return await select('SELECT * FROM wegov_orgs WHERE "type" NOT IN (\'Classification\', \'Official\', \'Public Figure\') ORDER BY name')
+    return await select('SELECT * FROM wegov_orgs WHERE "type" NOT IN (\'Classification\', \'Official\', \'Public Figure\')' + await _orgs_live() + ' ORDER BY name')
 
 @app.get('/get/orgs/profile/{id}', tags=['Organizations'])
 async def get_organization_profile(id: int):
+    # `parent_id` / `parent_name` / `parent_type` are COMPUTED aliases over the
+    # joined parent row, not table columns — the table columns of those names
+    # were 0% populated and are dropped in Phase 3. The alias names are load
+    # bearing: sub/orgheader.blade.php renders $org['parent_name'] and links via
+    # $org['parent_id'], and greys the label on a Classification/Official
+    # parent using $org['parent_type'].
     _base = "SELECT org.*, p.id AS parent_id, p.name AS parent_name, p.type AS parent_type"
-    _joins = r""" FROM wegov_orgs org LEFT JOIN wegov_orgs p ON p.airtable_id = regexp_replace(org.child_of, '[\[\]"]', '', 'g')"""
+    _joins = " FROM wegov_orgs org" + await orgfilter.parent_join(select)
     # Greenbook-derived agency head + fallback address (see api/enrich_agency.py).
     # Guarded so environments that haven't built the enrichment tables yet fall
     # back to the plain profile instead of 500ing every org page.
@@ -806,12 +909,12 @@ async def get_all_nyc_jobs():
 @app.get('/get/orgs/bycd/{cd}', tags=['Organizations'])
 async def get_organization_profile_associated_to_community_district(cd: str):
     #return await select('SELECT "id", "url" FROM wegov_orgs WHERE "communityDistrictId" LIKE $1', (cd,))
-    return await select('SELECT * FROM wegov_orgs WHERE "communityDistrictId" = $1', ('["{}"]'.format(cd),))
+    return await select('SELECT * FROM wegov_orgs WHERE "communityDistrictId" = $1' + await _orgs_live(), ('["{}"]'.format(cd),))
 
 @app.get('/get/orgs/bycc/{cc}', tags=['Organizations'])
 async def get_organization_profile_associated_to_city_council_district(cc: str):
     #return await select('SELECT "id", "url" FROM wegov_orgs WHERE "cityCouncilDistrictId" LIKE $1', (cc,))
-    return await select('SELECT * FROM wegov_orgs WHERE "cityCouncilDistrictId" = $1', ('["{}"]'.format(cc),))
+    return await select('SELECT * FROM wegov_orgs WHERE "cityCouncilDistrictId" = $1' + await _orgs_live(), ('["{}"]'.format(cc),))
 
 # ---- fire battalions (spatial) --------
 # These MUST be declared before the generic /{type}/{id}/{tbl} route below,

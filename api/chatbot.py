@@ -30,6 +30,16 @@ def get_client():
 
 # ========== Tool Implementations (Database Queries) ==========
 
+async def _live_orgs() -> str:
+    """`AND retired_at IS NULL` — retired orgs are merged-away duplicates.
+    See modules/orgfilter.py for why this is probed rather than inlined."""
+    try:
+        from modules import orgfilter
+    except ImportError:
+        import orgfilter
+    return await orgfilter.live_clause(lambda sql: _query(sql))
+
+
 async def _query(sql: str, *args):
     """Execute a database query using the shared connection pool."""
     try:
@@ -67,7 +77,8 @@ async def get_database_overview():
 async def search_organizations(query_text: str, limit: int = 20):
     """Search organizations by name."""
     rows = await _query(
-        'SELECT id, name, type FROM wegov_orgs WHERE name ILIKE $1 ORDER BY name LIMIT $2',
+        f'SELECT id, name, type FROM wegov_orgs WHERE name ILIKE $1'
+        f'{await _live_orgs()} ORDER BY name LIMIT $2',
         f"%{query_text}%", limit
     )
     if not rows:
@@ -81,15 +92,27 @@ async def search_organizations(query_text: str, limit: int = 20):
 
 async def get_organization_profile(org_id: int):
     """Get organization profile."""
-    rows = await _query('SELECT * FROM wegov_orgs WHERE id = $1', org_id)
+    # ⚠ The parent comes from the JOIN, not from a column. This used to render
+    # `child_of` raw, so the chatbot answered "**Parent**: ["recIXPDD84xmPdV2s"]"
+    # — an Airtable record id, JSON brackets and all. Phase 3 replaced that
+    # string join with wegov_orgs.parent_org_id; orgfilter resolves whichever
+    # mechanism this database has.
+    try:
+        from modules import orgfilter
+    except ImportError:
+        import orgfilter
+    pjoin = await orgfilter.parent_join(_query, "o", "par")
+    rows = await _query(
+        f'SELECT o.*, par.name AS parent_name FROM wegov_orgs o{pjoin} '
+        'WHERE o.id = $1', org_id)
     if not rows:
         return f"Organization {org_id} not found"
-    
+
     org = rows[0]
     return f"""# {org['name']}
 
 - **Type**: {org.get('type', 'N/A')}
-- **Parent**: {org.get('child_of', 'N/A')}
+- **Parent**: {org.get('parent_name') or 'N/A'}
 - **URL**: {org.get('url', 'N/A')}
 """
 

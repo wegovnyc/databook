@@ -11,6 +11,7 @@ use App\Custom\CapProjectsBuilder;
 use App\Custom\CapProjectsBuilder2024;
 use App\Custom\DatabookAPI;
 use App\Custom\Schema;
+use App\Custom\OrgChart;
 use Illuminate\Support\Str;
 
 
@@ -77,13 +78,30 @@ class Organizations extends Controller
 	 */
 	public function orgsChart($id = null)
 	{
-		// Citywide hierarchy is a static, curated tree; render it server-side as a
-		// db-tree (replaces the jquery.orgchart plugin).
-		$chartPath = public_path('data/orgChart.json');
-		$chart = is_file($chartPath) ? json_decode(file_get_contents($chartPath), true) : null;
+		// Built live from /get/orgs/chart in two views — see App\Custom\OrgChart
+		// for why this is no longer a static file (it was 5 months stale, and
+		// written to a container path nginx never served).
+		$view = ($_GET['view'] ?? '') === 'nyc' ? 'nyc' : 'databook';
+		$orgs = DatabookAPI::req('/get/orgs/chart');
+		$chart = $orgs ? OrgChart::build($orgs, $view) : null;
+		$counts = $orgs ? [
+			'databook' => OrgChart::countNodes(OrgChart::build($orgs, 'databook')),
+			'nyc' => OrgChart::countNodes(OrgChart::build($orgs, 'nyc')),
+		] : ['databook' => 0, 'nyc' => 0];
+
+		// Fall back to the last generated file only if the API is unreachable,
+		// so a deploy restart shows a stale chart rather than none.
+		if (!$chart)
+		{
+			$chartPath = public_path('data/orgChart.json');
+			$chart = is_file($chartPath)
+				? json_decode(file_get_contents($chartPath), true) : null;
+		}
 		return view('orgsChart', [
 			'breadcrumbs' => Breadcrumbs::orgsChart(),
 			'chart' => $chart,
+			'chartView' => $view,
+			'chartCounts' => $counts,
 			'defType' => $_GET['type'] ?? 'City Agency',
 			'defTag' => $_GET['tag'] ?? null,
 			'defSearch' => $_GET['search'] ?? null,
@@ -122,7 +140,12 @@ class Organizations extends Controller
 	public function orgsAgencies()
 	{
 		return view('orgsAgencies', [
-			'url' => DatabookAPI::url('/get/orgs/directory'),
+			// /get/orgs/agencies, not /get/orgs/directory: the server owns which
+			// types count as a city agency (api/modules/orgfilter.py). The page
+			// used to narrow the directory itself with a JS regex on the literal
+			// 'City Agency', which silently emptied when the OTI adoption
+			// retyped 240 orgs onto OTI's vocabulary.
+			'url' => DatabookAPI::url('/get/orgs/agencies'),
 			'globStats' => DatabookAPI::reqOCE('/pipeline/globstats') ?: json_decode(file_get_contents(public_path('data/globStats.json')), true),
 			'pagetitle' => "NYC City Agencies - Data Driven Profiles by NYC Databook",
 		]);
@@ -162,6 +185,21 @@ class Organizations extends Controller
 	 * auto-refreshing) instead of a hard, cacheable 404. Returns the org row, or
 	 * null when the org genuinely isn't found (caller aborts 404).
 	 */
+	/**
+	 * The name to SHOW for an org.
+	 *
+	 * `display_name` carries NYC's official name from the OTI agency registry
+	 * (t3jq-9nkf) wherever it differs from ours. ⚠ Display ONLY — `name` remains
+	 * the join key into contracts.agency (see oce.py::_resolve_org_id and
+	 * /oce/agency/summary?name=) and the source of every /o/{id}-{slug} URL, so
+	 * slugs, canonical links, procurement lookups and cache keys must keep using
+	 * $org['name'].
+	 */
+	protected static function dispName($org)
+	{
+		return ($org['display_name'] ?? null) ?: ($org['name'] ?? '');
+	}
+
 	protected function fetchOrg($id)
 	{
 		$rows = DatabookAPI::req("/get/orgs/profile/{$id}");
@@ -172,12 +210,34 @@ class Organizations extends Controller
 		if ($rows === false) {
 			abort(response()->view('errors.service-unavailable', [], 503, ['Retry-After' => '5']));
 		}
-		return $rows[0] ?? null;
+		$org = $rows[0] ?? null;
+		if ($org)
+			$org['civic_vendor'] = self::vendorActivity($id);
+		return $org;
+	}
+
+	/**
+	 * Track B: does this org also hold City contracts as a PASSPort vendor?
+	 *
+	 * Attached here rather than passed to each view because EVERY org page route
+	 * already funnels through fetchOrg() (#135), so the shared header partial can
+	 * read it off $org without changing a single view signature.
+	 *
+	 * Returns null on anything unexpected — an org profile must never fail
+	 * because an additive panel could not load.
+	 */
+	protected static function vendorActivity($id)
+	{
+		$r = DatabookAPI::reqOCE("/oce/org/vendor-activity?org_id=" . (int)$id, 8);
+		if (!is_array($r) || empty($r['linked']))
+			return null;
+		return $r;
 	}
 
 	public function orgAbout($id, $orgslug = '')
 	{
 		$org = $this->fetchOrg($id);
+		$dispName = self::dispName($org);
 		if (!$org)
 			return abort(404);
 		if (preg_match('~Union|Bargaining Unit~si', $org['type']))
@@ -214,7 +274,7 @@ class Organizations extends Controller
 				'prj' => DatabookAPI::url("/get/orgs/stats-prj/{$id}"),
 			],
 			'finStatYear' => 2025,
-			'breadcrumbs' => Breadcrumbs::org($id, $org['name']),
+			'breadcrumbs' => Breadcrumbs::org($id, self::dispName($org)),
 			'newsUrl' => DatabookAPI::url("/get/orgs/frontnews/{$id}"),
 			'eventsUrl' => DatabookAPI::url("/get/orgs/frontevents/{$id}"),
 			'procurementSummaryUrl' => DatabookAPI::url("/oce/agency/summary?name=" . rawurlencode($org['name'])),
@@ -223,7 +283,7 @@ class Organizations extends Controller
 
 			####### seo ########
 			'schema' => Schema::org($org),
-			'pagetitle' => "{$org['name']} | WeGovNYC Databook",
+			'pagetitle' => "{$dispName} | WeGovNYC Databook",
 			'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', $org['description']),
 			'canonicalUrl' => route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]),
 		]);
@@ -240,6 +300,7 @@ class Organizations extends Controller
 	public function orgSection($id, $orgslug = null, $section = null)
 	{
 		$org = $this->fetchOrg($id);
+		$dispName = self::dispName($org);
 		// Check if org exists before accessing its properties
 		if (!$org) {
 			return abort(404);
@@ -267,12 +328,12 @@ class Organizations extends Controller
 					? DatabookAPI::url(sprintf($details['fapireq'], $id))
 					: DatabookAPI::url("/get/orgs/section/{$id}/{$details['table']}"),
 				'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
-				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], $org['name'], $section, $ds->list[$section]),
+				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], self::dispName($org), $section, $ds->list[$section]),
 				'details' => $details,
 				'map' => $details['map'] ?? null,
 				####### seo ########
 				#'schema' => Schema::org($org),
-				'pagetitle' => "{$org['name']} | WeGovNYC Databook",
+				'pagetitle' => "{$dispName} | WeGovNYC Databook",
 				'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', $org['description']),
 				'canonicalUrl' => route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]),
 
@@ -296,6 +357,7 @@ class Organizations extends Controller
 	 */
 	protected function orgProcurementSection($id, $org, $section)
 	{
+		$dispName = self::dispName($org);
 		$ds = new OrgsDatasets();
 		
 		// Map section to subsection name
@@ -330,7 +392,7 @@ class Organizations extends Controller
 				'menu' => $ds->menu,
 				'activeDropDown' => 'Procurement',
 				'icons' => $ds->socicons,
-				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], $org['name'], $section, $ds->list[$section] ?? 'Procurement'),
+				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], self::dispName($org), $section, $ds->list[$section] ?? 'Procurement'),
 				'canonicalUrl' => route('orgProfile', ['id' => $id, 'orgslug' => $orgslug]),
 			];
 			$fy = request()->input('fiscal_year');
@@ -346,7 +408,7 @@ class Organizations extends Controller
 						. '&sort=' . urlencode($bsort) . '&order=' . $border
 						. ($fy ? '&fiscal_year=' . $fy : '') . ($bq !== '' ? '&q=' . urlencode($bq) : '');
 					return view('procurement.nycha_budget', $chrome + [
-						'pagetitle' => "{$org['name']} — Expense Budget | WeGovNYC Databook",
+						'pagetitle' => "{$dispName} — Expense Budget | WeGovNYC Databook",
 						'snippet' => "NYCHA expense budget — adopted, modified, committed, and actual spending.",
 						'summary' => DatabookAPI::reqOCE('/oce/nycha/budget/summary', 60) ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [], 'by_category' => []],
 						'units'   => DatabookAPI::reqOCE('/oce/nycha/budget/units' . $q, 60) ?: ['available' => false, 'data' => [], 'total' => 0],
@@ -362,7 +424,7 @@ class Organizations extends Controller
 						. '&sort=' . urlencode($vsort) . '&order=' . $vorder
 						. ($fy ? '&fiscal_year=' . $fy : '') . ($vq !== '' ? '&q=' . urlencode($vq) : '');
 					return view('procurement.nycha_revenue', $chrome + [
-						'pagetitle' => "{$org['name']} — Revenue | WeGovNYC Databook",
+						'pagetitle' => "{$dispName} — Revenue | WeGovNYC Databook",
 						'snippet' => "NYCHA revenue — adopted, modified, and recognized by funding source.",
 						'summary' => DatabookAPI::reqOCE('/oce/nycha/revenue/summary', 60) ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [], 'by_category' => [], 'by_funding_source' => []],
 						'sources' => DatabookAPI::reqOCE('/oce/nycha/revenue/sources' . $q, 60) ?: ['available' => false, 'data' => [], 'total' => 0],
@@ -380,7 +442,7 @@ class Organizations extends Controller
 						. '&page=' . $cpage . '&sort=' . urlencode($csort) . '&order=' . $corder
 						. ($cq !== '' ? '&q=' . urlencode($cq) : '') . $qc;
 					return view('procurement.nycha_contracts', $chrome + [
-						'pagetitle' => "{$org['name']} — Contracts | WeGovNYC Databook",
+						'pagetitle' => "{$dispName} — Contracts | WeGovNYC Databook",
 						'snippet' => "NYCHA contracts — original, current, and invoiced value by vendor.",
 						'summary' => DatabookAPI::reqOCE('/oce/nycha/contracts/summary', 60) ?: ['available' => false, 'totals' => [], 'by_year' => [], 'top_vendors' => []],
 						'contracts' => DatabookAPI::reqOCE($cUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
@@ -404,7 +466,7 @@ class Organizations extends Controller
 						. ($scat !== '' ? '&spending_category=' . urlencode($scat) : '')
 						. (in_array($ss8, ['Y', 'N'], true) ? '&section_8=' . $ss8 : '');
 					return view('procurement.nycha_spending', $chrome + [
-						'pagetitle' => "{$org['name']} — Spending | WeGovNYC Databook",
+						'pagetitle' => "{$dispName} — Spending | WeGovNYC Databook",
 						'snippet' => "NYCHA spending — every payment by category, funding source, and development.",
 						'summary' => $ssum,
 						'developments' => DatabookAPI::reqOCE('/oce/nycha/spending/by-development?sort=spending&limit=50' . ($sFy ? '&fiscal_year=' . $sFy : ''), 60) ?: ['available' => false, 'data' => [], 'total' => 0],
@@ -438,7 +500,7 @@ class Organizations extends Controller
 						. '&sort=' . urlencode($nvsort) . '&order=' . $nvorder
 						. ($nvq !== '' ? '&q=' . urlencode($nvq) : '');
 					return view('procurement.nycha_vendors', $chrome + [
-						'pagetitle' => "{$org['name']} — Vendors | WeGovNYC Databook",
+						'pagetitle' => "{$dispName} — Vendors | WeGovNYC Databook",
 						'snippet' => "NYCHA vendors — contract and payment activity, linked to City vendor profiles where matched.",
 						'vendors' => DatabookAPI::reqOCE($nvUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0, 'page' => 1, 'pages' => 1],
 						'filters' => ['q' => $nvq, 'sort' => $nvsort, 'order' => $nvorder],
@@ -465,7 +527,7 @@ class Organizations extends Controller
 					$councilStat = DatabookAPI::req('/get/orgs/stats-reg/' . $id . '/nyccouncildiscretionaryfunding');
 					return view('org_procurement_section', $chrome + [
 						'isNycha' => true,
-						'pagetitle' => "{$org['name']} Finances & Procurement | WeGovNYC Databook",
+						'pagetitle' => "{$dispName} Finances & Procurement | WeGovNYC Databook",
 						'snippet' => "NYCHA finances & procurement — budget, revenue, contracts, spending (Checkbook NYC), and Council discretionary funding.",
 						'budget'    => DatabookAPI::reqOCE('/oce/nycha/budget/summary', 30)    ?: ['available' => false, 'totals' => []],
 						'revenue'   => DatabookAPI::reqOCE('/oce/nycha/revenue/summary', 30)   ?: ['available' => false, 'totals' => []],
@@ -510,7 +572,7 @@ class Organizations extends Controller
 			'menu' => $ds->menu,
 			'activeDropDown' => 'Procurement',
 			'icons' => $ds->socicons,
-			'breadcrumbs' => Breadcrumbs::orgSect($org['id'], $org['name'], $section, $ds->list[$section] ?? 'Procurement'),
+			'breadcrumbs' => Breadcrumbs::orgSect($org['id'], self::dispName($org), $section, $ds->list[$section] ?? 'Procurement'),
 			
 			// Procurement data
 			'agency' => $data['agency'],
@@ -523,7 +585,7 @@ class Organizations extends Controller
 			'transactions' => $transactions,
 			
 			####### seo ########
-			'pagetitle' => "{$org['name']} Procurement | WeGovNYC Databook",
+			'pagetitle' => "{$dispName} Procurement | WeGovNYC Databook",
 			'snippet' => "Procurement data for {$org['name']} including contracts, solicitations, and vendors.",
 			'canonicalUrl' => route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]),
 		]);
@@ -555,6 +617,7 @@ class Organizations extends Controller
 	{
 		$section = 'projects';
 		$org = $this->fetchOrg($id);
+		$dispName = self::dispName($org);
 		$ds = new OrgsDatasets();
 		$details = $ds->get($section);
 		return $org && $details
@@ -568,7 +631,7 @@ class Organizations extends Controller
 				'icons' => $ds->socicons,
 				'url' => DatabookAPI::url("/get/orgs/section/{$id}/{$details['table']}"),
 				'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
-				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], $org['name'], $section, $ds->list[$section]),
+				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], self::dispName($org), $section, $ds->list[$section]),
 				'details' => $details,
 				'map' => true,
 				'finStatUrls' => [
@@ -583,7 +646,7 @@ class Organizations extends Controller
 				],
 				####### seo ########
 				#'schema' => Schema::org($org),
-				'pagetitle' => "{$org['name']} | WeGovNYC Databook",
+				'pagetitle' => "{$dispName} | WeGovNYC Databook",
 				'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', $org['description']),
 				'canonicalUrl' => route('orgProfile', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-')]),
 			])

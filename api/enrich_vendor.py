@@ -56,6 +56,13 @@ from datetime import datetime, timezone
 import aiohttp
 import asyncpg
 
+# Credential resolution lives in one place — see modules/dbcreds.py.
+try:
+    import dbcreds
+except ImportError:  # when imported as part of the modules package
+    from modules import dbcreds
+
+
 S3_BASE = os.environ.get(
     "PASSPORT_SUBTABLE_BASE",
     "https://databook2.s3.amazonaws.com/pre-processed",
@@ -419,7 +426,7 @@ if __name__ == "__main__":
         conn = await asyncpg.connect(
             host=os.environ.get("POSTGRES_HOST", "postgres"),
             user=os.environ.get("POSTGRES_USER", "postgres"),
-            password=os.environ.get("POSTGRES_PASSWORD", ""),
+            password=dbcreds.password(),
             database=os.environ.get("POSTGRES_DB", "databook"),
         )
         try:
