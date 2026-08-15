@@ -792,3 +792,54 @@ tr.fac-detail > td, tr.child-row > td { background: var(--db-navy-050); }
 }
 .db-analysis-menu a:hover { background: var(--db-brand-bg); color: var(--db-brand); }
 .db-analysis-menu a.is-active { background: var(--db-brand-bg); color: var(--db-brand); font-weight: var(--db-weight-semibold); }
+
+/* ===== RENEWAL QUEUE (§31, design_handoff_renewal_queue) =====
+   Collapsible row card + expanded assessment panel for /procurement/renewals,
+   and the two-column body for the Contract Story page. Everything else the
+   two screens use (.db-hero, .db-card, .db-detail-grid, .db-prose, etc.) is
+   already covered above. */
+
+/* ---- 31a. RENEWAL ROW (queue) --------------------------------------------- */
+.db-renewal-row-btn {
+    display: grid; grid-template-columns: 44px minmax(0,1fr) 132px 148px 200px 28px;
+    gap: var(--db-space-2); align-items: center; width: 100%; text-align: left;
+    background: none; border: 0; padding: var(--db-space-2); cursor: pointer; font: inherit;
+}
+.db-renewal-rank { font-family: var(--db-font-mono); font-size: var(--db-text-lg); font-weight: var(--db-weight-bold); color: var(--db-gray-400); text-align: center; }
+.db-renewal-identity { min-width: 0; }
+.db-renewal-purpose { display: block; font-size: var(--db-text-md); font-weight: var(--db-weight-bold); color: var(--db-primary); line-height: 1.3; text-wrap: pretty; }
+.db-renewal-meta { display: block; font-size: var(--db-text-xs); color: var(--db-text-muted); margin-top: 3px; }
+.db-renewal-id { font-family: var(--db-font-mono); font-size: var(--db-text-2xs); }
+.db-renewal-metric-label { font-size: var(--db-text-2xs); text-transform: uppercase; letter-spacing: .06em; font-weight: var(--db-weight-bold); color: var(--db-text-muted); margin-bottom: 2px; }
+.db-renewal-metric-value { font-size: var(--db-text-md); font-weight: var(--db-weight-semibold); color: var(--db-primary); font-variant-numeric: tabular-nums; }
+.db-renewal-metric-value.is-urgent { color: var(--db-danger); }
+.db-renewal-metric-sub { display: block; font-size: var(--db-text-2xs); font-weight: var(--db-weight-normal); color: var(--db-text-muted); }
+.db-renewal-metric-sub.is-urgent { color: var(--db-danger); }
+.db-renewal-oss-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+[data-agency-toggle] { cursor: pointer; border-bottom: 1px dotted var(--db-gray-400); }
+
+/* ---- 31b. EXPANDED PANEL (queue row + shared by story assessment table) -- */
+.db-renewal-panel { border-top: 1px solid var(--db-border); background: var(--db-bg-band); padding: var(--db-space-3) var(--db-space-3) var(--db-space-3) 56px; }
+.db-renewal-detail-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--db-space-3); }
+.db-renewal-options { list-style: none; padding: 0; margin: 0; display: grid; gap: 1px; background: var(--db-border); border: 1px solid var(--db-border); border-radius: var(--db-radius); overflow: hidden; }
+.db-renewal-options li { background: var(--db-white); padding: 8px 12px; display: flex; gap: var(--db-space-2); align-items: baseline; }
+.db-renewal-sources { list-style: none; padding: 0; margin: 0 0 var(--db-space-2); display: grid; gap: 6px; }
+.db-renewal-sources li { font-size: var(--db-text-xs); color: var(--db-text-muted); display: flex; gap: 6px; }
+
+/* ---- 31c. CONTRACT STORY two-column body + sticky sidebar ----------------- */
+.db-story-body { display: grid; grid-template-columns: minmax(0,1fr) 260px; gap: var(--db-space-5); align-items: start; }
+.db-story-sidebar { position: sticky; top: 120px; display: grid; gap: var(--db-space-2); }
+.db-story-section { margin-bottom: var(--db-space-5); scroll-margin-top: 120px; }
+
+/* ---- 31d. Responsive (design_handoff_renewal_queue "Responsive" section) - */
+@media (max-width: 1024px) {
+    .db-renewal-row-btn { display: flex; flex-wrap: wrap; align-items: center; gap: var(--db-space-2) var(--db-space-3); }
+    .db-renewal-rank { flex: 0 0 32px; }
+    .db-renewal-identity { flex: 1 1 calc(100% - 32px - var(--db-space-2)); }
+    .db-renewal-metric, .db-renewal-oss { flex: 1 1 auto; }
+    .db-renewal-row-btn .db-row-toggle { flex: 0 0 auto; margin-left: auto; }
+}
+@media (max-width: 900px) {
+    .db-story-body { grid-template-columns: 1fr; }
+    .db-story-sidebar { position: static; top: auto; }
+}

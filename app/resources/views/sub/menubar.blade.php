@@ -1,6 +1,7 @@
 @php
     // ---- Top nav (9 items): [label, href, active] -------------------------
     $nav = [
+        ['Renewals',      route('renewals'),           Request::is('procurement/renewals*')],
         ['Notices',       route('notices'),            Request::is('notices*')],
         ['Organizations', route('orgs'),               Request::is('organizations*') || Request::is('organization*') || Request::is('o/*')],
         ['People',        route('people'),             Request::is('people*')],
@@ -79,7 +80,7 @@
             ],
         ],
         'procurement' => [
-            'show'  => Request::is('procurement*') || Request::is('research*'),
+            'show'  => (Request::is('procurement*') || Request::is('research*')) && !Request::is('procurement/renewals*'),
             'title' => 'Procurement',
             'items' => [
                 ['Dashboard',     route('procurement.index'),         Request::is('procurement') && !Request::is('procurement/*')],
