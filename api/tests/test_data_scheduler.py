@@ -171,3 +171,111 @@ class TestUnmappedScanIsWiredIntoTheCycle:
             "unmapped-entity check silently never runs, and /pipeline/health "
             "reports total_alerts: 0 from a check that never executed."
         )
+
+
+class TestProcurementTableIndexes:
+    """The three PASSPort tables (`contracts`, `vendors`, `solicitations`) had
+    ZERO indexes on prod — measured 2026-08-04, `pg_indexes` returned no rows
+    for any of them, so /oce/contract/{id} opened with a seq scan over 55,806
+    rows (`Rows Removed by Filter: 55805`).
+
+    They cannot be fixed by hand: the extractor path COPYs into
+    `_staging_<table>`, DROPs the real table and RENAMEs the staging one over
+    it, and the staging table has no indexes — so any manually created index is
+    destroyed on the next ingest. TABLE_INDEXES + the post-ingest hook is the
+    only durable declaration point.
+    """
+
+    def test_contracts_indexes_are_declared(self):
+        from data_scheduler import TABLE_INDEXES
+        cols = {c for _n, c in TABLE_INDEXES.get("contracts", [])}
+        # Each of these backs a measured equality predicate in the request path.
+        assert {"ctr_id", "contract_id", "epin", "vendor_name"} <= cols
+
+    def test_vendors_and_solicitations_indexes_are_declared(self):
+        from data_scheduler import TABLE_INDEXES
+        assert {c for _n, c in TABLE_INDEXES.get("vendors", [])} >= {
+            '"PASSPort Supplier-ID"', '"Vendor Name"'}
+        assert {c for _n, c in TABLE_INDEXES.get("solicitations", [])} == {
+            '"EPIN"'}
+
+    def test_declared_contracts_columns_exist_in_the_ddl(self):
+        """The real failure mode. recreate_table_indexes SWALLOWS a failed
+        CREATE INDEX (prints an x and moves on), so an index naming a column
+        that does not exist would never be created and nothing would raise —
+        the same 'declared but silently never runs' shape as the unreachable
+        register_untracked_tables(). Pin the declared columns to the DDL the
+        ingest actually creates.
+        """
+        from data_scheduler import TABLE_INDEXES, _CONTRACTS_COLS
+        for idx_name, col in TABLE_INDEXES["contracts"]:
+            assert col in _CONTRACTS_COLS, (
+                f"{idx_name} indexes contracts.{col}, which is not in "
+                f"_CONTRACTS_DDL — CREATE INDEX would fail and be swallowed"
+            )
+
+    def test_every_indexed_table_has_the_hook_registered(self):
+        """An index declared for a table with no hook is never recreated."""
+        from data_scheduler import TABLE_INDEXES, POST_INGEST_HOOKS
+        for tbl in TABLE_INDEXES:
+            assert POST_INGEST_HOOKS.get(tbl), f"{tbl} has no post-ingest hook"
+
+    def test_index_hook_runs_before_the_other_hooks(self):
+        """`vendors` carries three enrichment hooks that query it by name, so
+        the index rebuild must come first or they seq-scan an unindexed table."""
+        from data_scheduler import POST_INGEST_HOOKS
+        first = POST_INGEST_HOOKS["vendors"][0]
+        assert first.__name__ == "<lambda>", (
+            "the index-recreation lambda must be first in vendors' hook list"
+        )
+        assert len(POST_INGEST_HOOKS["vendors"]) == 4
+
+    def test_recreate_creates_each_index_then_analyzes(self):
+        """A brand-new index on a just-renamed table is ignored by the planner
+        until the table has statistics, so the ANALYZE is load-bearing: without
+        it this hook can report success while every lookup still seq-scans."""
+        import asyncio
+        from data_scheduler import recreate_table_indexes
+
+        run = []
+
+        class _Conn:
+            async def execute(self, sql, *_a):
+                run.append(" ".join(sql.split()))
+                return "CREATE INDEX"
+
+        asyncio.run(recreate_table_indexes(_Conn(), "contracts"))
+        # ⚠ COUNTED FROM THE DECLARATIONS, not pinned to a literal. This asserted
+        # `== 4` and fired when the hook took on the GIN half — correctly, because
+        # the count changed; but a magic number here just has to be re-guessed every
+        # time an index is added. Both families, from their own sources.
+        from data_scheduler import TABLE_INDEXES, searchindexes
+        expected = len(TABLE_INDEXES["contracts"]) + len(searchindexes.for_table("contracts"))
+        assert sum("CREATE INDEX" in s for s in run) == expected
+        assert 'CREATE INDEX IF NOT EXISTS idx_contracts_ctr_id ON "contracts"(ctr_id)' in run
+        # The GIN half must go through too — this is the half that was missing on
+        # prod entirely, because nothing reapplied it after the extractor ingest.
+        assert any("gin (contract_title gin_trgm_ops)" in s for s in run), \
+            "the search indexes are no longer recreated by the hook"
+        assert run[-1] == 'ANALYZE "contracts"', "ANALYZE must run after the indexes"
+
+    def test_a_failed_index_does_not_abort_the_rest(self):
+        """Fail-soft: one bad index must not cost the others, and must not take
+        down the ingest that triggered the hook."""
+        import asyncio
+        from data_scheduler import recreate_table_indexes
+
+        run = []
+
+        class _Conn:
+            async def execute(self, sql, *_a):
+                if "idx_contracts_epin" in sql:
+                    raise RuntimeError("boom")
+                run.append(" ".join(sql.split()))
+                return "CREATE INDEX"
+
+        asyncio.run(recreate_table_indexes(_Conn(), "contracts"))
+        from data_scheduler import TABLE_INDEXES, searchindexes
+        _all = len(TABLE_INDEXES["contracts"]) + len(searchindexes.for_table("contracts"))
+        assert sum("CREATE INDEX" in s for s in run) == _all - 1
+        assert run[-1] == 'ANALYZE "contracts"'

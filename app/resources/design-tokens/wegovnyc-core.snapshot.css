@@ -1,0 +1,319 @@
+/* ============================================================================
+   SNAPSHOT — sarapis/wegovnyc-design-tokens :: src/core.css
+   ----------------------------------------------------------------------------
+   source commit : 665e30e56ad9dcf77c35bd4a913985e8149a685b
+   package       : v0.7.0
+   captured      : 2026-08-14
+
+   REFERENCE ONLY. This file is NEVER served and NEVER imported. It exists so
+   api/tests/test_design_token_parity.py can prove, with no network access, that
+   app/public/css/databook-tokens.css and the shared package have not silently
+   diverged. The two files claim the same reference values and until now nothing
+   checked that claim.
+
+   DATABOOK IS THE SOURCE OF TRUTH HERE, not the consumer. The package's reference
+   tier was harvested FROM Databook's token file, which is why it carries the
+   historical prefix, and Databook does not import the package. So this is a parity
+   check between equals, not a build dependency: nothing prod serves depends on it.
+
+   Refresh via .github/workflows/token-parity-check.yml, which re-fetches the package
+   monthly and opens an issue when it has moved. Do NOT hand-edit — an edited
+   snapshot makes the guard agree with itself.
+   ========================================================================== */
+
+/* ============================================================================
+   WeGovNYC Design System — CORE
+   ----------------------------------------------------------------------------
+   One design system, two brand variants: `wegov` (wegov.nyc) and `unnyc`
+   (unnyc.wegov.nyc). Import this file, then exactly one variant file, then
+   apply that variant's class (or `data-brand`) to the subtree it governs.
+
+   Two tiers, and the distinction is the whole point:
+
+     REFERENCE (--db-*, plus the civic additions)
+       Raw values. A palette, not a decision. Never consumed by a component.
+
+     SEMANTIC (--wg-*)
+       Roles: "the brand colour", "the page surface", "the muted text".
+       THIS is what products consume. A brand variant is nothing more than a
+       remap of these onto different reference values.
+
+   Defaults below are the CIVIC language both current products already share
+   (editorial serif display, UN-blue + gold on canonical navy, warm neutrals,
+   generous radii). There is no neutral baseline to preserve: Databook — the
+   old "Tool" expression — is deliberately OUT of this system, so the defaults
+   can simply be the language we actually ship.
+
+   ⚠ The `--db-*` prefix is HISTORICAL. These values were harvested from
+   Databook's mature token file, which is why they carry its prefix. Databook
+   is not part of this system and does not consume this file. Renaming the tier
+   is a wanted cleanup but touches every consumer, so it is deliberately NOT
+   bundled with the adoption refactor. See README "Known warts".
+
+   Framework-agnostic: pure custom properties, no layer, no build step. Custom
+   property definitions do not participate in cascade-layer priority, so this
+   file is safe to load at any point relative to your @layer stack.
+   ========================================================================== */
+
+:root {
+  /* ======================================================================
+     TIER 1 — REFERENCE TOKENS (raw values; do not consume directly)
+     ====================================================================== */
+
+  /* Navy ramp — the brand backbone */
+  --db-navy-900: #0b1f3a;
+  --db-navy-800: #102742;
+  --db-primary:  #162e51;   /* CANONICAL NAVY — the one true navy */
+  --db-navy-600: #1f3a63;
+  --db-navy-500: #2c4a73;
+  --db-navy-100: #e7ecf3;
+  --db-navy-050: #f3f6fa;
+
+  /* Functional blues */
+  --db-link:        #005ea2;
+  --db-link-hover:  #004080;
+  --db-accent:      #2491ff;
+  --db-accent-soft: #d3e6fb;
+
+  /* Reserved: Databook wordmark orange. Unused by this system; kept so the
+     reference tier stays reconciled with its upstream source. */
+  --db-brand:       #ff941f;
+  --db-brand-hover: #ffb154;
+
+  /* Neutral / gray ramp (USWDS-adjacent) */
+  --db-white:    #ffffff;
+  --db-gray-050: #f9fafb;
+  --db-gray-100: #f0f2f4;
+  --db-gray-200: #e6e9ec;
+  --db-gray-300: #dfe1e2;
+  --db-gray-400: #c6cacd;
+  --db-gray-500: #9aa0a6;
+  --db-gray-600: #757575;
+  --db-gray-700: #4b5159;
+  --db-gray-800: #2d3239;
+  --db-gray-900: #171717;
+
+  /* Semantic state colours (fg text + soft bg) */
+  --db-success: #2e8540; --db-success-bg: #ecf3ed; --db-success-fg: #1a5128;
+  --db-danger:  #b50909; --db-danger-bg:  #f8eded; --db-danger-fg:  #8a0707;
+  --db-warning: #c2850c; --db-warning-bg: #faf3e0; --db-warning-fg: #7a5408;
+  --db-info:    #005ea2; --db-info-bg:    #e7f1f9; --db-info-fg:    #00477a;
+
+  /* Type families */
+  --db-font-sans: 'Public Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --db-font-mono: 'Roboto Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+
+  /* Type scale (rem, 16px base) */
+  --db-text-3xs:0.75rem; --db-text-2xs:0.8125rem; --db-text-xs:0.875rem;
+  --db-text-sm:0.9375rem; --db-text-base:1rem; --db-text-md:1.0625rem;
+  --db-text-lg:1.25rem; --db-text-xl:1.5rem; --db-text-2xl:1.875rem;
+  --db-text-3xl:2.25rem; --db-text-4xl:3rem; --db-text-5xl:3.75rem;
+
+  --db-weight-normal:400; --db-weight-medium:500; --db-weight-semibold:600; --db-weight-bold:700;
+  --db-leading-tight:1.15; --db-leading-snug:1.3; --db-leading-normal:1.5; --db-leading-relaxed:1.65;
+  --db-tracking-tight:-0.01em; --db-tracking-wide:0.02em; --db-tracking-caps:0.06em;
+
+  /* Spacing (8px base, USWDS units) */
+  --db-space-05:4px; --db-space-1:8px; --db-space-15:12px; --db-space-2:16px;
+  --db-space-3:24px; --db-space-4:32px; --db-space-5:40px; --db-space-6:48px;
+  --db-space-7:64px; --db-space-8:80px;
+
+  /* Radius / elevation / motion (reference ramp) */
+  --db-radius-sm:4px; --db-radius:8px; --db-radius-lg:12px; --db-radius-pill:999px;
+  --db-shadow-sm:0 1px 2px rgba(11,31,58,.06);
+  --db-shadow-md:0 4px 10px rgba(11,31,58,.08);
+  --db-shadow-lg:0 12px 28px rgba(11,31,58,.12);
+  --db-transition:.18s ease;
+
+  /* ---- Civic reference additions (the palette this system actually ships) -- */
+  --wg-un-blue:      #4B92DB;
+  --wg-un-blue-dark: #2E6EAE;
+  --wg-un-blue-light:#7BB4E8;
+  --wg-gold:         #D4A843;
+  --wg-gold-light:   #E8C978;
+  --wg-gold-dark:    #B08A2E;
+
+  /* Flag colours, added for the UNNYC remap (v0.6.0). Reference tier = palette,
+     so these live here and the unnyc VARIANT maps semantics onto them; wegov.nyc
+     is untouched until its variant chooses them too.
+     - un-blue-brand is the UN's CURRENT brand blue — what un.org and the UN flag
+       SVG itself use — vs the older PMS 279 flag blue above.
+     - nyc-orange is the NYC flag's orange band, verbatim (#f60).
+     Contrast, measured: on navy #162e51 brand 4.48:1, orange 4.63:1 (both pass
+     AA normal text — better than the PMS 279 blue's 4.17). On white both are
+     ~3:1: large text / UI only. The -dark companions carry text-on-light roles
+     (5.38:1 and 5.50:1 on white). */
+  --wg-un-blue-brand:       #009EDB;
+  --wg-un-blue-brand-dark:  #00729E;
+  --wg-un-blue-brand-light: #66C7EC;
+  --wg-nyc-orange:          #FF6600;
+  --wg-nyc-orange-light:    #FF944D;
+  --wg-nyc-orange-dark:     #B34700;
+
+  /* ⚠ This stack includes 'Times New Roman'; the two products' display stacks
+     do NOT (they run DM Serif → Georgia → serif). Nothing consumes this token,
+     so it is left as-is rather than silently altering a captured value during
+     the adoption refactor. Reconcile deliberately — see README "Known warts". */
+  --wg-font-serif:   'DM Serif Display', Georgia, 'Times New Roman', serif;
+  --wg-font-sans:    var(--db-font-sans);
+
+  /* ======================================================================
+     TIER 2 — SEMANTIC TOKENS (--wg-*). Products consume ONLY these.
+     Values = the Civic language wegov.nyc and unnyc.wegov.nyc share today.
+     ====================================================================== */
+
+  /* -- Brand / navy ------------------------------------------------------- */
+  --wg-brand:          var(--db-primary);    /* canonical navy #162e51 */
+  --wg-brand-deep:     var(--db-navy-900);
+  --wg-brand-light:    var(--db-navy-500);
+  /* One step lighter than --wg-brand: for a band that must read as RAISED
+     above the brand surface rather than as a different colour. This is the
+     subnav pattern — distinguished by tone + elevation, never a divider rule. */
+  --wg-brand-raised:   var(--db-navy-600);
+
+  /* -- Accents ------------------------------------------------------------ */
+  --wg-accent:         var(--wg-un-blue);    /* UN blue — links, primary accent */
+  --wg-accent-strong:  var(--wg-un-blue-dark);
+  --wg-accent-soft:    var(--wg-un-blue-light);
+  --wg-accent-warm:        var(--wg-gold);   /* gold — reserved for "active"/emphasis */
+  --wg-accent-warm-light:  var(--wg-gold-light);
+  --wg-accent-warm-dark:   var(--wg-gold-dark);
+
+  /* -- Surfaces ----------------------------------------------------------- */
+  --wg-surface:        var(--db-white);
+  --wg-surface-alt:    #F4F1EB;              /* warm editorial wash */
+  --wg-surface-warm:   #F8F6F0;              /* page background */
+  --wg-surface-glass:  rgba(255, 255, 255, 0.72);
+  --wg-surface-band:   var(--db-navy-050);
+  --wg-warm-gray:      #E8E4DC;
+
+  /* -- Text --------------------------------------------------------------- */
+  --wg-text:           var(--db-primary);    /* body copy is navy, not black */
+  --wg-text-secondary: #5A6A82;
+  --wg-text-muted:     #8A96A8;
+  /* Two distinct roles on a dark brand surface — do not conflate them:
+     -on-brand is a softened off-white for body copy; -inverse is true white
+     for chrome that must read as crisp (header text, wordmarks). */
+  --wg-text-on-brand:  #eef3f9;
+  --wg-text-inverse:   var(--db-white);
+
+  /* -- Border ------------------------------------------------------------- */
+  --wg-border:         rgba(22, 46, 81, 0.1); /* canonical navy @ 10% */
+
+  /* -- States ------------------------------------------------------------
+     Four states, four roles each. The reference tier has carried
+     --db-<state>/-bg/-fg since the beginning, but nothing exposed them as
+     semantics, so products hardcoded state colours — which is precisely the
+     bug the tier split exists to prevent. (UNNYC shipped a literal #ff8f8f in
+     three places for exactly this reason.)
+
+       --wg-<state>            the colour itself: borders, icons, rules
+       --wg-<state>-surface    soft tinted background for a message block
+       --wg-<state>-text       darkened, for body copy ON that surface
+       --wg-<state>-on-brand   lightened, for use ON THE DARK BRAND SURFACE
+
+     ⚠ -on-brand is NOT a nicety. Measured against --wg-brand (#162e51):
+     --db-danger is 1.95:1 — a clear WCAG failure — while the -on-brand
+     variant is 6.20:1. A form error rendered on the navy campaign surface
+     with the plain danger colour is unreadable. Reach for -on-brand any time
+     the backdrop is --wg-brand / --wg-brand-deep.
+
+     Contrast, measured (WCAG 2.1, AA body text needs 4.5:1):
+       danger/success/warning/info -text on their own -surface:
+         8.67 / 8.27 / 6.12 / 8.41  — all pass
+       -on-brand on --wg-brand:
+         6.20 / 11.03 / 10.09 / 8.18 — all pass
+       base on white: 6.98 / 4.62 / 3.16 / 6.72
+       ⚠ --wg-warning is 3.16:1 on white — LARGE TEXT OR NON-TEXT ONLY.
+         For warning body copy on a light surface use --wg-warning-text.
+
+     Provenance, because it should not be guessed at later: the danger
+     -on-brand value is #FF8F8F, already shipping and eyeballed in the UNNYC
+     campaign forms. The other three are COMPUTED — the same lightness and
+     saturation as that value, applied to each state's own hue, which
+     reproduces #FF8F8F exactly for danger. They are accessible by
+     measurement but have not been looked at in product. Eyeball before first
+     use; the rule, not the individual value, is the thing to preserve. */
+  --wg-danger:            var(--db-danger);
+  --wg-danger-surface:    var(--db-danger-bg);
+  --wg-danger-text:       var(--db-danger-fg);
+  --wg-danger-on-brand:   #FF8F8F;
+
+  --wg-success:           var(--db-success);
+  --wg-success-surface:   var(--db-success-bg);
+  --wg-success-text:      var(--db-success-fg);
+  --wg-success-on-brand:  #8FFFA6;   /* computed — see note above */
+
+  --wg-warning:           var(--db-warning);
+  --wg-warning-surface:   var(--db-warning-bg);
+  --wg-warning-text:      var(--db-warning-fg);
+  --wg-warning-on-brand:  #FFD98F;   /* computed — see note above */
+
+  --wg-info:              var(--db-info);
+  --wg-info-surface:      var(--db-info-bg);
+  --wg-info-text:         var(--db-info-fg);
+  --wg-info-on-brand:     #8FD0FF;   /* computed — see note above */
+
+  /* -- Elevation ---------------------------------------------------------- */
+  /* ⚠ Based on #1b2a4a — the PRE-convergence navy — not on --db-navy-900.
+     Both products ship exactly these values, so they are the system's real
+     shadow ramp. Migrating them onto the canonical navy is a visible change
+     and therefore a separate, deliberate decision. */
+  --wg-shadow-sm:      0 1px 3px rgba(27, 42, 74, 0.08);
+  --wg-shadow-md:      0 4px 16px rgba(27, 42, 74, 0.1);
+  --wg-shadow-lg:      0 12px 40px rgba(27, 42, 74, 0.12);
+  --wg-shadow-xl:      0 20px 60px rgba(27, 42, 74, 0.15);
+
+  /* -- Radius (Civic ramp — softer than the reference ramp) --------------- */
+  --wg-radius-sm:      6px;
+  --wg-radius-md:      10px;
+  --wg-radius-lg:      16px;
+  --wg-radius-xl:      24px;
+  --wg-radius-pill:    var(--db-radius-pill);
+
+  /* -- Motion ------------------------------------------------------------- */
+  --wg-ease:           cubic-bezier(0.22, 1, 0.36, 1);
+  --wg-duration:       0.4s;
+
+  /* -- Type: families ---------------------------------------------------- */
+  --wg-font-display:   'DM Serif Display', Georgia, serif;
+  --wg-font-body:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --wg-display-weight: var(--db-weight-normal);  /* serif reads at 400 */
+
+  /* -- Type: scale ------------------------------------------------------- */
+  /* Aliased onto the reference ramp where a step exists; the five steps with
+     no reference equivalent (1.125 / 2 / 2.75 / 3.5 / 4.5rem) are literal.
+     Do not "fix" these by snapping to the nearest --db-text-* step — that is
+     a visible type change, not a refactor. */
+  --wg-fs-xs:   var(--db-text-3xs);   /* 0.75rem  */
+  --wg-fs-sm:   var(--db-text-xs);    /* 0.875rem */
+  --wg-fs-base: var(--db-text-base);  /* 1rem     */
+  --wg-fs-lg:   1.125rem;             /* no ref step */
+  --wg-fs-xl:   var(--db-text-lg);    /* 1.25rem  */
+  --wg-fs-2xl:  var(--db-text-xl);    /* 1.5rem   */
+  --wg-fs-3xl:  2rem;                 /* no ref step */
+  --wg-fs-4xl:  2.75rem;              /* no ref step */
+  --wg-fs-5xl:  3.5rem;               /* no ref step */
+  --wg-fs-6xl:  4.5rem;               /* no ref step */
+
+  /* -- Space ------------------------------------------------------------- */
+  /* 4px-based product ramp over the 8px reference ramp. sp-5 (20px) and
+     sp-24 (96px) have no reference step and stay literal. */
+  --wg-sp-1:  var(--db-space-05);  /* 4px  */
+  --wg-sp-2:  var(--db-space-1);   /* 8px  */
+  --wg-sp-3:  var(--db-space-15);  /* 12px */
+  --wg-sp-4:  var(--db-space-2);   /* 16px */
+  --wg-sp-5:  20px;                /* no ref step */
+  --wg-sp-6:  var(--db-space-3);   /* 24px */
+  --wg-sp-8:  var(--db-space-4);   /* 32px */
+  --wg-sp-10: var(--db-space-5);   /* 40px */
+  --wg-sp-12: var(--db-space-6);   /* 48px */
+  --wg-sp-16: var(--db-space-7);   /* 64px */
+  --wg-sp-20: var(--db-space-8);   /* 80px */
+  --wg-sp-24: 96px;                /* no ref step */
+
+  /* -- Layout ------------------------------------------------------------ */
+  --wg-container:      1200px;
+  --wg-section-y:      var(--wg-sp-16);
+  --wg-card-pad:       var(--wg-sp-8);
+}

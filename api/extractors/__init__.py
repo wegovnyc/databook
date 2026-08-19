@@ -12,6 +12,7 @@ import json
 import os
 
 import boto3
+from modules.errfmt import exc_str
 
 
 # =============================================================================
@@ -53,7 +54,7 @@ def upload_to_s3(file_path: str, s3_key: str) -> str | None:
         print(f"[extractor] Upload OK: {url}")
         return url
     except Exception as e:
-        print(f"[extractor] S3 upload failed: {e}")
+        print(f"[extractor] S3 upload failed: {exc_str(e)}")
         return None
 
 

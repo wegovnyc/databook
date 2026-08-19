@@ -12,6 +12,10 @@ from fastapi import APIRouter, Security, Query
 from fastapi.responses import JSONResponse
 
 from postgrex import PostgresModelAsync
+from modules.errfmt import exc_str
+# ⚠ Vendor-name -> supplier id as a MAP, never a join: 48 names hold >1 row in
+# `vendors`, and a join duplicates the contract. See the module docstring.
+from modules import vendorids
 
 
 router = APIRouter(prefix="/pipeline", tags=["Data Pipeline"])
@@ -152,10 +156,10 @@ async def get_dataset_counts():
     """
     import asyncpg
     from config import Config
+    from modules import dbcreds
     try:
         conn = await asyncpg.connect(
-            user=Config.db['user'], password=Config.db['pwd'],
-            database=Config.db['dbname'], host=Config.db['host'],
+            **dbcreds.settings(Config.db),
             timeout=10, statement_cache_size=0)
         try:
             row = await conn.fetchrow(
@@ -795,16 +799,12 @@ async def _build_briefing():
     """
     import asyncpg
     from config import Config
+    from modules import dbcreds
     from datetime import datetime
 
     print("[briefing] Building briefing cache...", flush=True)
 
-    conn = await asyncpg.connect(
-        user=Config.db['user'],
-        password=Config.db['pwd'],
-        database=Config.db['dbname'],
-        host=Config.db['host'],
-    )
+    conn = await asyncpg.connect(**dbcreds.settings(Config.db))
     await conn.execute("SET statement_timeout = '60s'")
 
     items = []
@@ -855,7 +855,7 @@ async def _build_briefing():
                     "url": f"https://a856-cityrecord.nyc.gov/RequestDetail/{r.get('RequestID', '')}"
                 })
         except Exception as e:
-            print(f"[briefing] hearings error: {e}", flush=True)
+            print(f"[briefing] hearings error: {exc_str(e)}", flush=True)
 
         # ── 2. Rules & Regulations (CROL Agency Rules) ──
         try:
@@ -891,7 +891,7 @@ async def _build_briefing():
                     "url": f"https://a856-cityrecord.nyc.gov/RequestDetail/{r.get('RequestID', '')}"
                 })
         except Exception as e:
-            print(f"[briefing] rules error: {e}", flush=True)
+            print(f"[briefing] rules error: {exc_str(e)}", flush=True)
 
         # ── 3. Contracts (recently started or ending) ──
         try:
@@ -941,7 +941,7 @@ async def _build_briefing():
                     "url": f"/procurement/contract/{ctr_id}" if ctr_id else "/procurement/contracts"
                 })
         except Exception as e:
-            print(f"[briefing] contracts error: {e}", flush=True)
+            print(f"[briefing] contracts error: {exc_str(e)}", flush=True)
 
         # ── 4. Solicitations (due within ±7 days) ──
         try:
@@ -974,7 +974,7 @@ async def _build_briefing():
                     "url": f"/procurement/solicitation/{r.get('EPIN', '')}" if r.get('EPIN') else "/procurement/solicitations"
                 })
         except Exception as e:
-            print(f"[briefing] solicitations error: {e}", flush=True)
+            print(f"[briefing] solicitations error: {exc_str(e)}", flush=True)
 
         # ── 5. Jobs (recently posted) ──
         try:
@@ -1015,7 +1015,7 @@ async def _build_briefing():
                     "url": f"https://cityjobs.nyc.gov/jobs?q={r.get('Job ID', '')}"
                 })
         except Exception as e:
-            print(f"[briefing] jobs error: {e}", flush=True)
+            print(f"[briefing] jobs error: {exc_str(e)}", flush=True)
 
         # ── 6. Personnel Changes (CROL) ──
         try:
@@ -1048,16 +1048,34 @@ async def _build_briefing():
                     "url": f"https://a856-cityrecord.nyc.gov/RequestDetail/{r.get('RequestID', '')}"
                 })
         except Exception as e:
-            print(f"[briefing] personnel error: {e}", flush=True)
+            print(f"[briefing] personnel error: {exc_str(e)}", flush=True)
 
         # ── 7. New Vendors (first-time contract appearance) ──
+        # ⚠⚠ NO `LEFT JOIN vendors`, and here the cost of one would be a DROPPED
+        # ITEM, not just a repeated one. 48 vendor names hold more than one row in
+        # `vendors` (PASSPort duplicate registrations — ABSORB SOFTWARE INC is
+        # 1871820/FNR0000088 and 2073456/FNR0000453, identical otherwise), so the
+        # join returned such a contract TWICE — and this query is `LIMIT 10`, so the
+        # second copy pushes a real new vendor off the briefing entirely.
+        #
+        # ⚠ MEASURED, AND THIS ONE IS LATENT RATHER THAN LIVE — say so rather than
+        # claiming a fix that shows up: all 14 ambiguous names that hold contracts
+        # debuted between 2016 and 2024-08, NONE in the last year, and today's window
+        # holds 0 new-vendor rows at all. It fires the first time a newly
+        # duplicate-registered vendor's first contract lands in the +/-7-day window.
+        # Fixed because the mechanism is identical and the consequence here is worse,
+        # not because a figure moves today.
+        #
+        # ⚠ The map is fetched through `_bq`, on the briefing's own dedicated
+        # connection, using vendorids.SQL — NOT a second copy of that query. A
+        # different spelling of `lower(trim(...))` on either side and the map
+        # resolves nothing, silently.
         try:
+            vendor_ids = vendorids.from_rows(await _bq(vendorids.SQL))
             rows = await _bq(
                 """SELECT v.vendor_name, v.agency, v.contract_title,
-                          v.award_amount, v.start_date, v.ctr_id, v.contract_id,
-                          vp."PASSPort Supplier-ID" as passport_id
+                          v.award_amount, v.start_date, v.ctr_id, v.contract_id
                    FROM contracts v
-                   LEFT JOIN vendors vp ON UPPER(vp."Vendor Name") = UPPER(v.vendor_name)
                    WHERE v.start_date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$'
                      AND TO_DATE(v.start_date, 'MM/DD/YYYY')
                          BETWEEN current_date - interval '7 days'
@@ -1081,7 +1099,11 @@ async def _build_briefing():
                     dt_str = None
                 amt = r.get("award_amount")
                 ctr_id = r.get("ctr_id") or r.get("contract_id")
-                passport_id = r.get("passport_id")
+                # ⚠ None for a name resolving to two supplier ids, and the existing
+                # fallback below is the RIGHT answer for that: the contract page is a
+                # real destination, where an arbitrary one of two companies is a
+                # wrong claim. No downstream change needed.
+                passport_id = vendor_ids.get(vendorids.key(r.get("vendor_name")))
                 if passport_id:
                     url = f"/procurement/vendor/{passport_id}"
                 elif ctr_id:
@@ -1099,7 +1121,7 @@ async def _build_briefing():
                     "url": url
                 })
         except Exception as e:
-            print(f"[briefing] vendors error: {e}", flush=True)
+            print(f"[briefing] vendors error: {exc_str(e)}", flush=True)
 
         # ── 8. Capital Project Milestones ──
         try:
@@ -1135,7 +1157,7 @@ async def _build_briefing():
                     "url": f"/projects/capital?prj={prj_id}" if prj_id else "/projects/capital"
                 })
         except Exception as e:
-            print(f"[briefing] capital milestones error: {e}", flush=True)
+            print(f"[briefing] capital milestones error: {exc_str(e)}", flush=True)
 
         # ── 9. Council Hearings (jehiah/nyc_legislation events) ──
         try:
@@ -1208,7 +1230,7 @@ async def _build_briefing():
                     "url": legistar_url
                 })
         except Exception as e:
-            print(f"[briefing] council hearings error: {e}", flush=True)
+            print(f"[briefing] council hearings error: {exc_str(e)}", flush=True)
 
         # Filter out items with no date
         items = [i for i in items if i["date"]]
@@ -1500,7 +1522,7 @@ async def get_hearing_briefing_api(event_id: str, year: int = 2026):
                     "ctr_id": r.get("ctr_id", ""),
                 })
         except Exception as e:
-            print(f"[hearing-brief] contracts error: {e}", flush=True)
+            print(f"[hearing-brief] contracts error: {exc_str(e)}", flush=True)
 
         # Budget
         try:
@@ -1523,7 +1545,7 @@ async def get_hearing_briefing_api(event_id: str, year: int = 2026):
                     "fy": r.get("Fiscal Year"),
                 })
         except Exception as e:
-            print(f"[hearing-brief] budget error: {e}", flush=True)
+            print(f"[hearing-brief] budget error: {exc_str(e)}", flush=True)
 
         # Capital projects
         try:
@@ -1544,7 +1566,7 @@ async def get_hearing_briefing_api(event_id: str, year: int = 2026):
                     "budget": float(r["budget"]) if r.get("budget") else None,
                 })
         except Exception as e:
-            print(f"[hearing-brief] capital error: {e}", flush=True)
+            print(f"[hearing-brief] capital error: {exc_str(e)}", flush=True)
 
         # CROL notices
         try:
@@ -1568,7 +1590,7 @@ async def get_hearing_briefing_api(event_id: str, year: int = 2026):
                     "request_id": r.get("RequestID", ""),
                 })
         except Exception as e:
-            print(f"[hearing-brief] crol error: {e}", flush=True)
+            print(f"[hearing-brief] crol error: {exc_str(e)}", flush=True)
 
         # Jobs count
         try:
@@ -1580,7 +1602,7 @@ async def get_hearing_briefing_api(event_id: str, year: int = 2026):
             if rows:
                 theme_result["open_jobs"] = rows[0].get("cnt", 0)
         except Exception as e:
-            print(f"[hearing-brief] jobs error: {e}", flush=True)
+            print(f"[hearing-brief] jobs error: {exc_str(e)}", flush=True)
 
         theme_data.append(theme_result)
 
@@ -1689,7 +1711,7 @@ async def trigger_rebuild_stats():
         try:
             await rebuild_glob_stats(conn)
         except Exception as e:
-            print(f"[stats] Background rebuild failed: {e}", flush=True)
+            print(f"[stats] Background rebuild failed: {exc_str(e)}", flush=True)
         finally:
             await conn.close()
 
@@ -1793,7 +1815,7 @@ async def trigger_single_check(
                         await process_extractor_dataset(
                             bg_conn, ds, session, force=True)
             except Exception as e:
-                print(f"[single-check] Error processing {table}: {e}")
+                print(f"[single-check] Error processing {table}: {exc_str(e)}")
             finally:
                 await bg_conn.close()
 

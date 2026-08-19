@@ -1,0 +1,45 @@
+family,notices_measured,reason
+# Product families excluded from NOTICE MATCHING only. They stay in the licence
+# catalogue and keep their family pages — this file suppresses the "City Record
+# notices mentioning this product" panel for them, nothing else.
+#
+# ⚠ WHY A LIST AND NOT A THRESHOLD. No hit count separates signal from noise
+# here: Microsoft legitimately lands 1,219 notices and is the most important row
+# on the page, while Streetscape lands 139 and is entirely noise. A ceiling would
+# drop the first and keep the second. A threshold the reader cannot see is also
+# indistinguishable from an opinion, which is the rule this page already applies
+# to the consolidation badge.
+#
+# ⚠⚠ THESE ARE THE *ORDINARY WORD* CASES ONLY. A SECOND, LARGER FAMILY OF FALSE
+# MATCHES WAS THE STEMMER, and it is fixed in code rather than here: with the
+# `english` configuration, `Feedly` stems to 'feed' and matched 121 notices about
+# data FEEDS, and `Mobilize` stems to 'mobil' and matched 2,388 saying "mobile".
+# The matcher now uses `simple`, which does not stem — Feedly 121 -> 0, Mobilize
+# 2,388 -> 11. Do not add a family here without checking whether the real cause
+# is stemming; if it is, the fix is not an exclusion.
+#
+# `notices_measured` is the count on 2026-08-18 (1,101,601 notices) under the
+# matcher AS SHIPPED (`simple`). ⚠ The four names under 5 characters are also
+# skipped by MIN_NAME_LEN, and their figures are word-bounded regex rather than
+# `simple` — they are marked. Counts are EVIDENCE, not a rule: nothing reads this
+# column, and re-measuring is how you audit a row.
+Webex,888,"Owner decision 2026-08-18. Real Cisco product the City buys, but the mentions are overwhelmingly 'join the hearing via Webex' — procedural, not procurement."
+Summer,578,"A season. The family is real (the $43.4M loan-forgiveness advisory) which is exactly why it cannot be matched on its name."
+Reach,486,"Ordinary verb, and a component of 'outreach' phrasing throughout. The family is a real $64.8K DSS subscription (Reach Progress PBC)."
+CLEAR,146,"Ordinary adjective, and 'CLEAR' appears in notice boilerplate."
+Streetscape,139,"The sharpest case: a genuine product name that is also among the most ordinary words in NYC construction notices."
+Cornerstone,78,"Ordinary noun, and used figuratively in policy language."
+Seamless,55,"Ordinary adjective."
+Metallic,44,"Ordinary adjective, common in construction and materials notices."
+Learning Management System,39,"A generic category phrase, not a product name."
+Community Software Solutions,25,"Owner decision 2026-08-18. A VENDOR name, not a product — the contracts are let by Community Software Solutions, Inc. — and three generic words."
+Mainframe Software,21,"Owner decision 2026-08-18. NOT a product name — the classifier read it off the contract title 'MAINFRAME SOFTWARE MAINTENANCE (ACCENTURE)'. Two ordinary words."
+Domino,19,"Owner decision 2026-08-18. A real product (Domino data-science platform, DoITT $189.9K) but the word is also IBM Domino, a pizza chain and 'domino effect'."
+Mobilize,11,"Ordinary verb. The family is a real $165K DSS subscription. ⚠ Was 2,388 under the english stemmer ('mobil' also matches 'mobile'); 11 is the honest figure and it is now nearly harmless — kept because the verb is still the verb."
+Precisely,10,"An adverb. Real vendor, unusable as a match term. Was 58 under the stemmer."
+Articulate,5,"Owner decision 2026-08-18. A real product (Articulate 360 e-learning authoring, DCAS $5.5K) whose name is an ordinary verb."
+Reflections,2,"Ordinary noun. Was 349 under the stemmer, so almost all of that was stemming rather than the word."
+Box,2479,"⚠ word-bounded regex, not `simple` — also skipped by MIN_NAME_LEN. 'P.O. Box' is an address, on essentially every notice carrying one. Word boundaries do NOT fix this (2,831 naive vs 2,479 bounded); the failure is semantic."
+Zoom,1557,"⚠ word-bounded regex, not `simple` — also skipped by MIN_NAME_LEN. Owner decision 2026-08-18. Same shape as Webex: real product, mentions are 'join via Zoom'."
+Quest,30,"⚠ word-bounded regex, not `simple` — also skipped by MIN_NAME_LEN. Precautionary: cut from 21,702 naive ('request' contains it), but 'Quest' is also Quest Diagnostics, a different company."
+SAS,27,"⚠ word-bounded regex, not `simple` — also skipped by MIN_NAME_LEN. Precautionary: a 3-character name with other expansions in City text."

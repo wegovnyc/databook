@@ -19,6 +19,7 @@ from urllib.parse import urljoin
 import requests
 
 from extractors import S3_BUCKET, S3_PREFIX, upload_to_s3
+from modules.errfmt import exc_str
 
 # PASSPort Public Data Sources
 DATASETS = [
@@ -154,7 +155,7 @@ def fetch_dataset(dataset: dict, dry_run: bool = False) -> tuple[str | None, int
         response.raise_for_status()
         html_content = response.text
     except Exception as e:
-        print(f"[passport] Failed to fetch {dataset['url']}: {e}")
+        print(f"[passport] Failed to fetch {dataset['url']}: {exc_str(e)}")
         return None, 0
 
     # Try extracting data from inline JS
@@ -181,7 +182,7 @@ def fetch_dataset(dataset: dict, dry_run: bool = False) -> tuple[str | None, int
                     script_resp.text, dataset['variable']
                 )
             except Exception as e:
-                print(f"[passport] Script fetch error: {e}")
+                print(f"[passport] Script fetch error: {exc_str(e)}")
 
     if not data or not isinstance(data, list):
         print(f"[passport] No data extracted for {dataset['name']}")

@@ -1,0 +1,180 @@
+product,family,generic,why
+# Curated license-product groupings for the Licenses page.
+#
+# Matching is on the NORMALIZED product (case- and punctuation-insensitive), so
+# you do NOT need a row for spelling variants that differ only in case or
+# punctuation -- `Solarwinds`/`SolarWinds` and `Accellion/Kiteworks`/`Accellion
+# Kiteworks` already merge automatically. Add a row only when the merge needs
+# real-world knowledge.
+#
+# generic=1 means THIS IS NOT A PRODUCT NAME -- the classifier could not identify
+# one. Those are shown as "unidentified" and never ranked as software.
+#
+# ⚠ Every row is a claim. If two products are from one vendor but are genuinely
+# different purchases, prefer leaving them separate: the page shows both the
+# family and the underlying product, so over-merging destroys detail that
+# under-merging preserves.
+#
+# --- Microsoft: one vendor relationship, distinct instruments ------------------
+# Grouped because concentration is the headline finding and splitting the ELA
+# from its support contracts understates Microsoft's share. The product column
+# still shows which is which on the detail table.
+Microsoft ELA,Microsoft,,Enterprise License Agreement - the single largest license line
+Microsoft Unified Support,Microsoft,,Support contract on the same vendor relationship
+Microsoft Premier Support,Microsoft,,Predecessor of Unified Support; 16 contracts across 14 agencies
+Microsoft Premier Services,Microsoft,,Spelling variant of Premier Support
+Microsoft SQL Server,Microsoft,,Database licensing
+Microsoft,Microsoft,,Bare vendor name
+# --- Esri: the split that halved a real footprint ------------------------------
+ArcGIS,Esri ArcGIS,,Product name without the vendor
+ESRI ArcGIS,Esri ArcGIS,,Vendor + product
+Esri ArcGIS,Esri ArcGIS,,Mixed-case variant
+# --- Renames: the trap a string match cannot see ------------------------------
+ShotSpotter,SoundThinking (ShotSpotter),,Company renamed to SoundThinking in 2023
+SoundThinking,SoundThinking (ShotSpotter),,Post-rename name for the same gunshot-detection product
+Precisely,Precisely,,
+Precisely Software,Precisely,,
+Precisely (formerly Pitney Bowes),Precisely,,Renamed from Pitney Bowes Software in 2020
+# --- Genuine aliases needing world knowledge ----------------------------------
+Check Point,Check Point,,
+Checkpoint,Check Point,,One word - same security vendor
+Micro Focus,Micro Focus,,
+Microfocus,Micro Focus,,No space
+Microfocus Product Suites,Micro Focus,,
+CartoDB,CARTO,,Renamed CARTO
+CARTO,CARTO,,
+Box,Box,,
+Box.com,Box,,Domain form of the same product
+AWS,Amazon Web Services,,Acronym
+Amazon Web Services,Amazon Web Services,,
+Alert Media,AlertMedia,,Spaced form
+AlertMedia,AlertMedia,,
+Commvault,Commvault,,
+Commvault Metallic,Commvault,,SaaS product line of the same vendor
+Forescout,Forescout,,
+Forescout ActiveCare,Forescout,,Support tier of the same product
+SendGrid,Twilio SendGrid,,Acquired by Twilio
+Twilio SendGrid,Twilio SendGrid,,
+# --- Same product, editions or modules ----------------------------------------
+Axon,Axon,,
+Axon Evidence,Axon,,Evidence.com - digital evidence management
+Axon Body Camera System,Axon,,Body-worn camera platform from the same vendor
+NICE Systems,NICE,,
+NICE Justice,NICE,,Justice product line of the same vendor
+Bluebeam Revu,Bluebeam Revu,,
+Bluebeam Revu Extreme,Bluebeam Revu,,Edition of the same product
+MongoDB,MongoDB,,
+MongoDB Enterprise,MongoDB,,Commercial edition
+Chocolatey,Chocolatey,,
+Chocolatey for Business,Chocolatey,,Commercial edition
+Red Hat,Red Hat,,
+Red Hat Enterprise Linux,Red Hat,,
+Red Hat Ansible,Red Hat,,Same vendor - automation product
+FICO Blaze,FICO Blaze,,
+FICO Blaze Advisor,FICO Blaze,,Full product name
+SAS,SAS,,
+SAS Analytics,SAS,,
+SAP,SAP,,
+SAP Secure Enterprise,SAP,,
+Care4,Care4,,
+Care4 Software,Care4,,
+Liferay,Liferay,,
+Liferay Experience Cloud,Liferay,,Hosted edition
+Everbridge,Everbridge,,
+Everbridge Critical Event Management,Everbridge,,Full product name
+Cornerstone OnDemand,Cornerstone,,
+Cornerstone LMS,Cornerstone,,Same vendor LMS
+ManageEngine,ManageEngine,,
+ManageEngine Desktop Central,ManageEngine,,Module of the same suite
+DocuSign,DocuSign,,
+DocuSign CLM,DocuSign,,Contract lifecycle module
+EveryAction,EveryAction,,
+EveryAction SmartVAN,EveryAction,,Module of the same platform
+Infor Public Sector,Infor,,
+Infor EAM,Infor,,Enterprise asset management from the same vendor
+E-builder,e-Builder,,
+e-Builder,e-Builder,,
+# --- Citrix, OpenText/Documentum, IBM, Quest: multi-product vendors -----------
+# Grouped at vendor level because the interesting question for these is total
+# vendor exposure; the product stays visible in the detail table.
+Citrix,Citrix,,
+Citrix/Cloud Software,Citrix,,
+Citrix ShareFile,Citrix,,
+Citrix Netscaler,Citrix,,
+OpenText,OpenText,,
+OpenText Documentum,OpenText,,Documentum acquired by OpenText in 2017
+Documentum,OpenText,,
+EMC Documentum,OpenText,,Pre-acquisition branding
+OpenText Liquid Office,OpenText,,
+Liquid Office,OpenText,,
+# ⚠⚠ IBM IS SPLIT, unlike Citrix/OpenText/Quest above. Web-verified 2026-08-13
+# (docs/license-identity-review.md, cited): "IBM" on these contracts is a CATCH-ALL
+# BRAND NAME, not a product, and the recorded purposes prove it without the web --
+# database security, statistical analysis and document imaging are three unrelated
+# jobs. One family meant ONE function tag (`database-platform`) for all of it, which
+# was wrong for two thirds of the value, and no single tag could have been right.
+# ⚠ The contrast with Citrix is deliberate and is the rule to apply: group at vendor
+# level when the products do the SAME job, split when they do different jobs. A
+# family is the unit that carries one function and one lever.
+# `IBM Software` STAYS as family `IBM` because it names no product at all -- see the
+# note in license_family_class.csv.
+IBM Software,IBM,,"⚠ Names no product. $5.85M across 2 contracts (DOF $5.31M ""Enterprise software maintenance and support"", DOHMH $0.54M ""Enterprise software licensing""). Left as the vendor-level residual rather than guessed at; a candidate for the generic bucket if the City will not say what it covers."
+IBM SPSS,IBM SPSS,,Statistical analysis. 10 contracts across ACS/DCAS/DFTA/Probation once SPSS is folded in
+SPSS,IBM SPSS,,Acquired by IBM in 2009
+IBM Guardium,IBM Guardium,,Database activity monitoring and security - a different job from SPSS or FileNet
+FileNet,IBM FileNet,,"Acquired by IBM in 2006; sold as IBM Content Manager/FileNet. Document management and imaging"
+Quest,Quest,,
+Quest Toad,Quest,,
+Quest Spotlight,Quest,,
+# --- Broadcom/CA: the mainframe legacy tail -----------------------------------
+Broadcom CA Mainframe Software,Broadcom (CA),,CA Technologies acquired by Broadcom in 2018
+CA-IDMS,Broadcom (CA),,CA mainframe database - still licensed
+CA Erwin,Broadcom (CA),,CA data modelling tool
+# --- LRS: mainframe printing --------------------------------------------------
+LRS Software,LRS,,
+LRS Mainframe Printing Software,LRS,,
+# --- Seamless: renamed to GovOS ----------------------------------------------
+SeamlessDocs,Seamless GovOS,,Renamed GovOS
+Seamless GovOS,Seamless GovOS,,
+# --- Qumu / Archibus: case-only, listed for clarity --------------------------
+QUMU,Qumu,,
+Qumu,Qumu,,
+ARCHIBUS,Archibus,,
+Archibus,Archibus,,
+# --- NOT PRODUCTS: the classifier could not identify one ---------------------
+# ⚠ These are shown as "unidentified". Do NOT invent a family for them; that
+# would put a product on the page that does not exist. If you can identify the
+# real product from the contract, change the enrichment row instead.
+Various,(unidentified),1,Classifier could not name a product
+Unknown,(unidentified),1,Classifier could not name a product
+Engineering Software,(unidentified),1,Generic description not a product
+Project Management Software,(unidentified),1,Generic description not a product
+Volunteer Management Software,(unidentified),1,Generic description not a product
+Windows Patching Software,(unidentified),1,Generic description not a product
+Software Asset Management Solution,(unidentified),1,Generic description not a product
+UMS Software Asset Management,(unidentified),1,Generic description not a product
+Privileged Access Management,(unidentified),1,Generic capability not a product
+EHR System,(unidentified),1,Generic description not a product
+Electronic Health Records System,(unidentified),1,Generic description not a product
+VMS Software,(unidentified),1,Ambiguous - could be several vendors
+Timekeeper,(unidentified),1,Generic description not a product
+Unspecified,(unidentified),1,Not a product name
+Unspecified Software,(unidentified),1,Not a product name
+Various Software,(unidentified),1,Not a product name
+# ⚠ MERGES ADDED 2026-08-12, both verified against the contract records rather
+# than inferred from the names.
+#
+# AT&T vehicle tracking: ONE continuous DCAS relationship the classifier split by
+# reading two different product strings out of an IDENTICAL contract title
+# ("Renewal of Real-time Vehicle Tracking"), same vendor (AT&T MOBILITY), same
+# agency, CONSECUTIVE non-overlapping terms 09/2021->09/2022 and 09/2022->09/2024.
+# ⚠ DELIBERATELY NOT merged into Geotab, whose contract begins 09/01/2024 exactly
+# as this one ends. The succession is real and is recorded in the class `why`, but
+# merging would assert that the earlier AT&T-branded service WAS the Geotab
+# product, and nothing in this data establishes that. Same discipline as keeping
+# Casebuilder and ShotSpotter separate under one vendor.
+AT&T Fleet Tracking,AT&T Vehicle Tracking,,"Same DCAS contract line as AT&T Vehicle Tracking - identical title, same vendor, consecutive terms"
+# Lexis+ is LexisNexis's current research platform, and the City buys both under
+# the same relationship. ⚠ Westlaw stays separate: it is Thomson Reuters, a
+# genuinely different vendor and a competing product.
+Lexis+,LexisNexis,,"LexisNexis current-generation research platform - same vendor and relationship"

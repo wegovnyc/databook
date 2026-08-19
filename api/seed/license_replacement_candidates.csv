@@ -1,0 +1,152 @@
+family,candidate,candidate_kind,confidence,licence,gov_adopters,url,why
+# CANDIDATE REPLACEMENTS for licensed software. One row per (family, candidate).
+#
+# SOURCE: govoss-catalog.vercel.app -- eight European national public-sector
+# open-source catalogues (SILL/FR, Developers Italia, openCode/DE, iMio/BE,
+# Offentligkod/SE, Avoinkoodi/FI, code.europa.eu, awesome-codegouvfr).
+# Read from the JSON API, generated_at 2026-08-11T14:36:09Z: 1,995 entries.
+#
+# ⚠ CORRECTED 2026-08-13. Earlier rows in this file were built by driving the
+# human page in a browser and reading 100 entries at a time. That process was
+# wrong in two ways and both are fixed here:
+#   * It cited 2,121 entries / 1,881 repos. The catalogue was DEDUPLICATED to
+#     1,995 (127 rows collapsed across 84 groups) and 58 non-adoptable entries
+#     (upstream forks, CI plumbing, locale bundles) were removed. Any "how many
+#     options exist" count taken from the old data was inflated.
+#   * It missed matches that were present. `replaces` is now a precomputed
+#     inverted index (/by-product.json, 95 proprietary products), and querying it
+#     found $19.06M of strong software matches against $2M found by hand.
+#
+# ⚠⚠ AN EMPTY RESULT NOW MEANS "NOT MAPPED", NOT "NO ALTERNATIVE EXISTS".
+# `replaces` covers 73 of 1,995 entries -> 95 products, hand-seeded and openly
+# partial. The ONLY absences safe to report as real gaps are the four the
+# catalogue itself asserts in /meta.json -> known_gaps. Every other blank is an
+# unanswered question. This distinction is why two rows below changed verdict.
+#
+# ⚠⚠ EVERY ROW IS A JUDGEMENT, NOT A MEASUREMENT. These are suggestions from
+# matching a product description against a catalogue search. NOTHING here has been
+# checked against what the agency actually needs, its integrations, its data
+# residency rules, its accessibility obligations or its support requirements. A
+# `strong` confidence means "functionally the same category of tool", never
+# "swap it out".
+#
+# ⚠ AND THE UNDERLYING RATING IS THE WEAKEST FIELD ON THE SITE. This work started
+# from build_vs_buy = high, which agrees only 75% between two models and is
+# self-inconsistent on 64 of 435 families. Two clusters in it turned out to be
+# category errors (training CONTENT and managed HOSTING are not software) -- see
+# license_family_class.csv. Treat this file as a reading list, not a plan.
+#
+# confidence:
+#   strong   like-for-like functional substitute, government-adopted
+#   partial  covers the main use case with known gaps
+#   adjacent same domain, different shape - read before believing
+#   none     searched and found nothing (recorded deliberately, see below)
+#
+# candidate_kind:
+#   oss-replacement   a different, open-source product
+#   oss-same-product  the product is ALREADY open source; the spend is a paid tier
+#   hosting-alt       a hosting/price alternative, not a software substitute
+#   none-found        no candidate located
+#
+# ⚠ "none" ROWS ARE KEPT ON PURPOSE. An empty search is a finding: it says the open
+# commons has no answer here, and it stops the next person repeating the search. The
+# two largest replaceable lines (Hootsuite $902K, Voicecast $900K) are both `none`.
+#
+# --- GEOSPATIAL: the largest strong software match in the inventory ------------
+# ⚠⚠ MISSED TWICE before /by-product.json existed. Rated `low`/`medium`
+# replaceability, so it never appeared in any replaceability-ranked view; and the
+# browser pass searched "geoserver" but never "arcgis". At $13.3M it is 70% of
+# all strong-software matched value -- more than every other match combined.
+Esri ArcGIS,QGIS,oss-replacement,strong,GPL-2.0-or-later,69,https://github.com/qgis/QGIS,"$13.30M over 24 contracts and 8 agencies. QGIS has 69 government adopters - the highest count in the catalogue - and /by-product.json maps both ArcGIS Desktop and ArcGIS Pro to it at `strong`. ⚠ ArcGIS SERVER maps only to GeoServer at `partial`, so a desktop-seat migration and a server migration are different projects with different risk. Read before treating the whole $13.3M as addressable."
+
+# --- MONITORING / OBSERVABILITY -----------------------------------------------
+SolarWinds,Zabbix,oss-replacement,strong,GPL-2.0-only,15,https://github.com/zabbix/zabbix,"$1.47M, rated low/medium so previously unassessed. 15 government adopters."
+Splunk,Grafana,oss-replacement,partial,AGPL-3.0-only,15,https://github.com/grafana/grafana,"$2.13M. `partial` - Grafana covers dashboards and alerting, not Splunk's log search and SIEM behaviour. Do not book this as a saving."
+Tableau,Apache Superset,oss-replacement,strong,Apache-2.0,7,https://github.com/apache/superset,"$550K, rated `medium` so previously unassessed."
+
+# --- COLLABORATION / CONFERENCING ---------------------------------------------
+Zoom,BigBlueButton,oss-replacement,strong,LGPL-3.0,23,https://github.com/bigbluebutton/bigbluebutton,"$1.23M family total (an earlier $74K figure counted only the `high`-rated contract). 23 adopters; built for education/public sector."
+Webex,Jitsi,oss-replacement,strong,Apache-2.0,8,https://github.com/jitsi/jitsi-meet,$32K.
+Slack,Mattermost,oss-replacement,strong,MIT,8,https://github.com/mattermost/mattermost,$22K.
+
+# --- CONFIG MANAGEMENT: both are paid tiers of open-source tooling -------------
+Red Hat,Ansible,oss-same-product,strong,GPL-3.0-or-later,32,https://github.com/ansible/ansible,"$535K. Red Hat Ansible Automation Platform is the commercial tier of Ansible (32 adopters). RHEL support is a separate, legitimate line - read the contract before assuming which this is."
+Puppet Enterprise,Ansible,oss-replacement,partial,GPL-3.0-or-later,32,https://github.com/ansible/ansible,"$482K. `partial` - a different config-management model, so this is a re-platforming, not a swap."
+
+# --- DESIGN / IDENTITY / CRM: assessed, mostly weak matches -------------------
+Figma,Penpot,oss-replacement,strong,MPL-2.0,1,https://github.com/penpot/penpot,"$58K. Only 1 government adopter - `strong` on capability, thin on public-sector proof."
+Salesforce,Dolibarr,oss-replacement,partial,GPL-3.0-or-later,2,https://github.com/Dolibarr/dolibarr,"$3.12M. `partial` and only 2 adopters - a CRM migration of this size is not a license swap. Recorded so it is assessed, not to propose it."
+SAP,Odoo,oss-replacement,partial,LGPL-3.0,1,https://github.com/odoo/odoo,"$1.17M. Same caution as Salesforce, more so."
+Citrix,Apache Guacamole,oss-replacement,partial,Apache-2.0,4,https://github.com/apache/guacamole-server,"$27.22M - the largest `partial` in the inventory. Guacamole is a remote-access gateway; Citrix VDI is a desktop-virtualisation platform. NOT equivalent. Listed because $27M deserves an explicit assessment, and the honest assessment is that this is not a drop-in."
+TeamViewer,RustDesk,oss-replacement,strong,AGPL-3.0,5,https://github.com/rustdesk/rustdesk,$47K - same match as GoToMyPC.
+
+# --- SURVEYS: the cleanest match found, ~$816K across four products -------------
+SurveyMonkey,LimeSurvey,oss-replacement,strong,GPL-3.0-only,18,https://github.com/LimeSurvey/LimeSurvey,"Catalogued as 'simple, fast and anonymous online survey tool' with 18 SILL adopters. Direct functional equivalent and the most government-proven match on this list."
+SurveyGizmo,LimeSurvey,oss-replacement,strong,GPL-3.0-only,18,https://github.com/LimeSurvey/LimeSurvey,Same capability as SurveyMonkey; one platform could absorb both.
+Alchemer,LimeSurvey,oss-replacement,strong,GPL-3.0-only,18,https://github.com/LimeSurvey/LimeSurvey,Alchemer is SurveyGizmo renamed - consolidating the three survey tools is the finding as much as the substitution.
+Surveyapp,LimeSurvey,oss-replacement,partial,GPL-3.0-only,18,https://github.com/LimeSurvey/LimeSurvey,"$17K. Kiosk/pulse-feedback shape; LimeSurvey covers it but is not purpose-built for it."
+# --- HELPDESK / TICKETING: ~$144K -----------------------------------------------
+IssueTrak,Zammad,oss-replacement,strong,AGPL-3.0-only,,https://github.com/zammad/zammad,"Catalogued via openCode as a web-based open-source helpdesk and customer-support system."
+IssueTrak,iTop,oss-replacement,partial,AGPL-3.0-only,2,https://github.com/Combodo/iTop,"ITIL service management with helpdesk AND a CMDB - more than IssueTrak does, which is a migration cost as well as a benefit."
+Track-It!,Zammad,oss-replacement,strong,AGPL-3.0-only,,https://github.com/zammad/zammad,Same capability; consolidating both helpdesks onto one tool is the larger win.
+Track-It!,uniTicket,oss-replacement,adjacent,AGPL-3.0-or-later,,https://github.com/UniversitaDellaCalabria/uniTicket,Django ticket system from Developers Italia; university-oriented so read before assuming fit.
+# --- REMOTE DESKTOP: $174K ------------------------------------------------------
+GoToMyPC,Apache Guacamole,oss-replacement,strong,Apache-2.0,,https://github.com/apache/guacamole-server,"Clientless remote desktop gateway over standard protocols - browser-based, which is the closest shape to GoToMyPC."
+GoToMyPC,RustDesk,oss-replacement,strong,AGPL-3.0,5,https://github.com/rustdesk/rustdesk,5 SILL adopters; self-hostable relay.
+GoToMyPC,Remmina,oss-replacement,partial,GPLv2+,5,https://gitlab.com/Remmina/Remmina,"A client, not a gateway - fits desk-to-desk access, not unattended remote support."
+# --- LMS PLATFORM: $176K. ⚠ platform only, NOT the content subscriptions --------
+Absorb LMS,Moodle,oss-replacement,strong,GPL-3.0-only,36,https://github.com/moodle/moodle,"30 SILL + 6 Offentligkod adopters - the most widely adopted entry relevant to this inventory. ⚠ Replaces the PLATFORM. It does not replace LinkedIn Learning, Pluralsight or GO1, which are content libraries (see license_family_class.csv)."
+Absorb LMS,ILIAS,oss-replacement,partial,GPL-3.0-or-later,1,https://github.com/ILIAS-eLearning/ILIAS,Catalogued in both openCode and SILL as a full learning platform.
+Absorb LMS,Chamilo,oss-replacement,partial,GPL-3.0-or-later,2,https://github.com/chamilo/chamilo-lms,Distance-learning platform; lighter than Moodle.
+SCORM Cloud,Moodle,oss-replacement,partial,GPL-3.0-only,36,https://github.com/moodle/moodle,"$5K. Moodle consumes SCORM packages natively, so this may simply disappear with an LMS migration."
+# --- FORMS + WORKFLOW: ~$787K. Weakest of the 'strong-ish' clusters ------------
+Seamless GovOS,Formulardesigner,oss-replacement,partial,MPL-2.0,,https://gitlab.opencode.de,"Modular accessible form designer built for German public administration. ⚠ Built around German administrative conventions - real localisation work."
+Seamless GovOS,Form PA,oss-replacement,partial,AGPL-3.0-or-later,,https://github.com/italia,"Developers Italia - turns PDF processes into web forms, which is the same problem statement."
+Seamless GovOS,Goupile,oss-replacement,adjacent,AGPL-3.0,1,https://github.com/Koromix/goupile,Form designer aimed at electronic case report forms; narrower than a general forms platform.
+Seamless GovOS,CIB seven,oss-replacement,adjacent,Apache-2.0,,https://github.com/cibseven,"Camunda 7 fork for workflow/process automation - covers the workflow half, not the forms half."
+Jotform,Formulardesigner,oss-replacement,partial,MPL-2.0,,https://gitlab.opencode.de,$39K. Same caveats as above.
+# --- ALREADY OPEN SOURCE: the substitute is the same product -------------------
+GeoServer,GeoServer,oss-same-product,strong,GNU GPLv2,7,https://github.com/geoserver/geoserver,"$74K. GeoServer is itself catalogued with 5 SILL + 2 Offentligkod adopters. The question is whether the commercial tier earns its price, not what to switch to."
+NGINX Plus,nginx,oss-same-product,strong,BSD-2-Clause,,https://github.com/nginx/nginx,$85K for the commercial edition of an open-source web server.
+Anaconda,Anaconda,oss-same-product,partial,BSD-3-Clause,,https://anaconda.com/,"$67K. Open-source core; ⚠ Anaconda changed its license terms for larger organisations, so confirm which terms apply before assuming a free path."
+DBeaver,DBeaver Community,oss-same-product,strong,Apache-2.0,,https://github.com/dbeaver/dbeaver,$25K. Community edition is fully open source.
+Shiny Server Pro,Shiny Server,oss-same-product,strong,AGPL-3.0,,https://github.com/rstudio/shiny-server,$69K for the Pro tier of an open-source dashboard server.
+Elasticsearch,OpenSearch,oss-replacement,strong,Apache-2.0,,https://github.com/opensearch-project/OpenSearch,"$65K. ⚠ Elasticsearch is NO LONGER open source (SSPL 1.0 / Elastic License 2.0) - its own catalogue entry says so. OpenSearch is the Apache-2.0 fork and is separately catalogued. This is a migration, not a tier change."
+# --- HOSTING: substitution is the SECOND lever; benchmarking is the first ------
+Socrata,CKAN,oss-replacement,strong,AGPL-3.0,,https://github.com/ckan/ckan,"$828K open-data portal hosting. CKAN is the established open-source open-data portal. ⚠ This platform is itself an open-data product, so the build-vs-buy judgement here is better informed than anywhere else on the list."
+Box,Nextcloud,oss-replacement,partial,AGPL-3.0-or-later,58,https://github.com/nextcloud,"$656K. 44 SILL + 14 Offentligkod adopters - the most-adopted file-sharing entry. ⚠ Per-seat cost benchmark first; a self-hosted migration for 3 agencies is a program, not a swap."
+WP Engine,,hosting-alt,none,,,,"$177K. ⚠ NOT a software license and NOT therefore excused. WordPress is free; this buys hosting and ops. WP Engine publishes per-site and per-visit list pricing, so divide $177K by the number of sites and compare - a public rate card makes this the most checkable line on the page, easier than any open-source swap."
+Pantheon,,hosting-alt,none,,,,"$681K (family total; an earlier $319K figure counted only one contract). Same rate-card arithmetic as WP Engine at four times the value."
+Amazon Web Services,,hosting-alt,none,,,,"$6.80M and rated `low` replaceability, so it never surfaced in the replaceability view at all. Metered consumption: the levers are committed-use/reserved coverage, rightsizing and idle-resource elimination - not substitution. Largest hosting-class line in the inventory."
+# --- MICROSOFT: mapped, but NOT as a $643M saving ------------------------------
+# ⚠⚠ /by-product.json maps Microsoft -> LibreOffice at `partial` + kind `service`,
+# and Microsoft Office -> LibreOffice at `strong` + `software`. The distinction is
+# the whole point: our Microsoft family is $643.5M of ENTERPRISE AGREEMENT,
+# operating systems, databases and support contracts. LibreOffice replaces the
+# office-suite slice. Reporting $643.5M as replaceable would be the single
+# largest category error available on this page.
+Microsoft Office,LibreOffice,oss-replacement,strong,MPL-2.0,87,https://github.com/LibreOffice/core,"$18K on the separately-named 'Microsoft Office' family. 87 government adopters - the most-adopted office suite in the catalogue."
+Microsoft,LibreOffice,oss-replacement,adjacent,MPL-2.0,87,https://github.com/LibreOffice/core,"$643.5M family. Marked `adjacent` DELIBERATELY: the catalogue itself says partial/service. This row exists to stop the match being re-derived as a saving, not to propose one."
+
+# --- SEARCHED AND FOUND NOTHING. Kept so nobody repeats the search ------------
+# ⚠ REVISED 2026-08-13: only the four gaps the catalogue ASSERTS in
+# /meta.json -> known_gaps are real absences. Everything else previously recorded
+# here as 'none-found' was an unanswered question, and one (Atlassian) was simply
+# wrong. The four confirmed gaps below are corroborated by the catalogue's own
+# gap list, not just by a search that came back empty.
+Hootsuite,,none-found,none,,,,"$902K, the largest `high`-rated line. Searched 'social media' - ZERO catalogue entries. European public-sector open source has no social-media scheduling tool. A real gap in the commons, not an oversight in the search."
+Voicecast,,none-found,none,,,,"$900K mobile text messaging. Searched 'sms' and 'mass mailing' - nothing usable. ⚠ Overlaps Twilio ($529K, cloud SMS/voice API) - check for duplicate capability before looking for a replacement."
+Fulcrum,,none-found,none,,,,$278K field data collection. Searched 'field data' - zero results.
+Spectrio,,none-found,none,,,,$86K digital signage. Searched 'signage' - one unrelated QGIS cycle-route plugin.
+Acuvate Chatbot,,none-found,none,,,,"$476K customer-service automation. Catalogue has ChatMD, BASTI and an ITZBund evaluation bot - all experimental or narrow, none a service-desk chatbot replacement."
+# ⚠ CORRECTED: this was recorded as none-found on 2026-08-11 with the claim "no
+# Redmine, OpenProject or Taiga in the catalogue". THAT WAS FALSE. All three are
+# present; the browser search failed because it queried the category phrase
+# ("project management") rather than the product name. /by-product.json maps
+# Jira -> OpenProject (strong, 21 adopters) and Redmine (strong), and
+# Confluence -> BookStack (strong) and Wiki.js (strong). A negative finding from
+# a keyword search is only as good as the keyword.
+Atlassian (Jira/Confluence),OpenProject,oss-replacement,strong,GPL-3.0,21,https://github.com/opf/openproject,"$207K. Highest-adoption project-management entry in the catalogue. Replaces the Jira half; pair with BookStack or Wiki.js for Confluence."
+JIRA,OpenProject,oss-replacement,strong,GPL-3.0,21,https://github.com/opf/openproject,$71K on a separately-named family - candidate for a curated merge with Atlassian.
+Confluence and Jira,BookStack,oss-replacement,strong,MIT,5,https://github.com/BookStackApp/BookStack,"$28K. Catalogued wiki/documentation platform; Wiki.js is the other strong option."
+OrgChart Now,Diagrams.net,oss-replacement,adjacent,Apache-2.0,5,https://www.diagrams.net,"$139K. General diagramming with 5 Offentligkod adopters; does NOT do org-chart generation from an HR data source, which is the actual capability bought."

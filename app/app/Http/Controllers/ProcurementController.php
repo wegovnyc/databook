@@ -101,6 +101,8 @@ class ProcurementController extends Controller
             // because several register rows can legitimately share one vendor —
             // United Federation of Teachers is the union plus two bargaining units.
             'civicOrgs' => $data['civic_orgs'] ?? [],
+            // License product families this vendor supplies.
+            'software' => $data['software'] ?? [],
             'breadcrumbs' => Breadcrumbs::procurementVendor($id, $data['vendor']['name'] ?? 'Vendor')
         ]);
     }
@@ -211,6 +213,12 @@ class ProcurementController extends Controller
             'spendVendors' => $data['spend_vendors'] ?? [],
             'evaluations' => $data['evaluations'] ?? [],           // MOCS agency ratings for this contract
             'evaluationsAsOf' => $data['evaluations_as_of'] ?? '',
+            // ⚠ This array NAMES each key, so a new payload key does not reach the
+            // view unless it is added here. That is the #247 defect exactly: the
+            // Overview served `composition` and `pipeline`, the Blade read them,
+            // every unit guard passed, and the page rendered without them because
+            // the controller never passed them through.
+            'relatedContracts' => $data['related_contracts'] ?? [],
             'breadcrumbs' => Breadcrumbs::procurementContract($id, $data['contract']['contract_id'] ?? 'Contract')
         ]);
     }
@@ -253,6 +261,91 @@ class ProcurementController extends Controller
     }
 
     /**
+     * Software Licenses (UNLISTED — not in the nav, noindex).
+     *
+     * ⚠ Everything on this page is AI-derived: is_license agreed only 92%
+     * between two models on a 40-contract sample and no row is human-curated,
+     * which is why it ships behind the Analysis identity and unpublished.
+     *
+     * Longer timeout than the 5s default because the payload aggregates ~950
+     * contracts; the API caches it 6h, so only the first call after a restart
+     * is slow. A failure degrades to the unavailable state rather than 500ing.
+     */
+    public function digitalReformLicenses(Request $request)
+    {
+        $family = trim((string) $request->input('family', ''));
+        $agency = trim((string) $request->input('agency', ''));
+        // ⚠ The purchase class is the page's headline lens and was the one table
+        // with no drill-down: families and functions both clicked through while
+        // classes dead-ended. Resolved server-side by the API through
+        // modules/licenseclass, never re-derived here.
+        $class  = trim((string) $request->input('class', ''));
+
+        $lic = DatabookAPI::reqOCE('/oce/licenses', 15);
+        if (!is_array($lic)) {
+            $lic = ['available' => false, 'reason' => 'the API could not be reached'];
+        }
+
+        $drill = null;
+        if ($family !== '' || $agency !== '' || $class !== '') {
+            $q = '/oce/licenses/contracts?limit=300&family=' . urlencode($family)
+               . '&agency=' . urlencode($agency)
+               . '&class=' . urlencode($class);
+            $drill = DatabookAPI::reqOCE($q, 15);
+            if (!is_array($drill)) {
+                $drill = null;
+            }
+        }
+
+        return view('procurement.digital-reform-licenses', [
+            'pagetitle' => 'Software Licenses - NYC Databook',
+            'lic'       => $lic,
+            'family'    => $family,
+            'agencySel' => $agency,
+            'classSel'  => $class,
+            'drill'     => $drill,
+        ]);
+    }
+
+    /**
+     * One software FUNCTION: which products do this job, in which agencies.
+     *
+     * The click the consolidation view was missing - naming a function as
+     * fragmented and then dead-ending is worse than not naming it.
+     */
+    public function digitalReformLicenseCapability(Request $request, $cap)
+    {
+        $data = DatabookAPI::reqOCE('/oce/licenses/capability/' . urlencode($cap), 15);
+        if (!is_array($data) || !($data['available'] ?? false)) {
+            abort(404, 'Software function not found');
+        }
+
+        return view('procurement.digital-reform-license-capability', [
+            'pagetitle' => 'Software by function - NYC Databook',
+            'cap'       => $data,
+        ]);
+    }
+
+    /**
+     * One license product family, at its own URL.
+     *
+     * 404s on an unknown slug rather than rendering an empty shell, so a stale
+     * or mistyped link is unambiguous.
+     */
+    public function digitalReformLicenseFamily(Request $request, $slug)
+    {
+        $fam = DatabookAPI::reqOCE('/oce/licenses/family/' . urlencode($slug), 15);
+        if (!is_array($fam) || !($fam['available'] ?? false)) {
+            abort(404, 'License family not found');
+        }
+
+        return view('procurement.digital-reform-license-family', [
+            'pagetitle' => ($fam['family'] ?? 'License family') . ' licenses - NYC Databook',
+            'fam'       => $fam,
+        ]);
+    }
+
+    /**
      * Shared loader for both Digital Services pages: reads all filter params,
      * calls the combined API (cached 24h), and returns the full view-data array.
      * The two pages each render the slice they need.
@@ -282,6 +375,11 @@ class ProcurementController extends Controller
         $expiringLicense = trim((string) $request->input('expiring_license', ''));
         $expiringBuildbuy = trim((string) $request->input('expiring_buildbuy', ''));
         $expiringShowNonTech = trim((string) $request->input('expiring_shownontech', ''));
+        // Deep-link target from the (unlisted) Licenses page: a product FAMILY name.
+        $expiringProduct = trim((string) $request->input('expiring_product', ''));
+        // Which composition segment the contracts table is drilled into (a slug from
+        // modules/techsegments; the API resolves it and returns the resolved name).
+        $contractSegment = trim((string) $request->input('contract_segment', ''));
 
         // Single combined API call with Laravel file cache (24h). Cache key + the
         // forwarded query string both include every filter so results stay correct.
@@ -295,6 +393,10 @@ class ProcurementController extends Controller
             'expiring_method' => $expiringMethod, 'expiring_min' => $expiringMin, 'expiring_flag' => $expiringFlag,
             'expiring_category' => $expiringCategory, 'expiring_license' => $expiringLicense,
             'expiring_buildbuy' => $expiringBuildbuy, 'expiring_shownontech' => $expiringShowNonTech,
+            'expiring_product' => $expiringProduct,
+            // The composition bar's drill-down. ⚠ Part of the cache key too, or every
+            // segment would serve whichever segment was requested first.
+            'contract_segment' => $contractSegment,
         ]);
         $cacheKey = 'digital_reform_' . md5($qs);
         $allData = \Illuminate\Support\Facades\Cache::remember($cacheKey, 86400, function () use ($qs) {
@@ -309,12 +411,25 @@ class ProcurementController extends Controller
         $contractOptions = $allData['contract_options'] ?? ['methods' => []];
 
         return [
+            'expiringProduct' => $expiringProduct,
             'stats' => $stats,
             'charts' => $charts,
             'vendors' => $vendors,
             'contracts' => $contracts,
             'expiring' => $expiring,
             'contractOptions' => $contractOptions,
+            // ⚠⚠ THE CONTROLLER IS THE SEAM, AND FORGETTING IT IS SILENT. The API
+            // served `composition`, `pipeline` and `scope`; this array did not pass
+            // them, so the Overview rendered with no composition bar and no pipeline
+            // block and threw no error — `$composition ?? []` degrades politely.
+            // Every guard passed, because they scan the template and the API, not the
+            // wiring between them. Only rendering the page found it.
+            // Same lesson as the org chart: selecting a value proves nothing about
+            // surfacing it.
+            'composition' => $allData['composition'] ?? [],
+            'pipeline' => $allData['pipeline'] ?? [],
+            'scope' => $allData['scope'] ?? [],
+            'contractSegment' => $contractSegment,
             'vendorPage' => $vendorPage,
             'vendorSort' => $vendorSort,
             'vendorOrder' => $vendorOrder,

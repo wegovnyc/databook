@@ -1,0 +1,85 @@
+capability,catalogue_category,label,note
+# CLOSED capability vocabulary. One tag per licence family.
+#
+# ⚠⚠ THIS EXISTS BECAUSE EVERY EARLIER MATCH DEPENDED ON A HUMAN GUESSING THE
+# RIGHT SEARCH WORD. The browser pass found LimeSurvey only because someone
+# thought to type "survey", and MISSED OpenProject entirely because it typed the
+# category phrase "project management" instead of the product name "Jira". A
+# closed tag set, mapped to the catalogue's own categories, removes the guess.
+#
+# catalogue_category must be one of the 19 categories in
+# govoss-catalog.vercel.app/meta.json -> categories. A guard fails the build on a
+# tag whose category KEY is not in that list, because an unmappable tag cannot match
+# anything and would look like a covered family that simply has no options.
+#
+# ⚠ `label` IS THE DISPLAYED NAME AND LIVES HERE ON PURPOSE (added 2026-08-11).
+# It used to live in a PHP map inside two Blade templates, both of which had
+# fallen behind this file: 18 of the 46 tags in use rendered as raw kebab-case
+# keys (`project-tracking`, `hr-workforce`) next to properly labelled ones, on a
+# published page. A tag added here could not be labelled without editing two
+# views nobody thought to open, so it never was. Add a tag, add its label, and
+# every surface picks it up. A guard fails the build on a blank label.
+#
+# ⚠ `other` IS DELIBERATELY ABSENT. It is the classifier's abstention sentinel
+# (classify_license_purchases.py builds its enum as `caps + ["other"]`), not a
+# function, and it has no catalogue category to map to. Its label is a named
+# constant in api/routers/licenses.py.
+#
+# ⚠ NOTES CONTAINING COMMAS MUST BE QUOTED. Six rows here were unquoted and their
+# `note` was silently truncated at the first comma (`identity-access` read "SSO",
+# losing "directory, privileged access, password vaults"). Harmless while nothing
+# rendered the note -- and it would have corrupted the `label` column the moment
+# one was appended, which is how it was found.
+survey-collection,web-content,Surveys,Online surveys and feedback collection
+lms-platform,learning-knowledge,Learning platform,"The learning PLATFORM. ⚠ NOT course content - that is a content-subscription"
+training-content,learning-knowledge,Training content,"Course libraries. No software substitutes for content"
+helpdesk-ticketing,crm-service,Helpdesk & ticketing,Service desk and incident ticketing
+crm,crm-service,CRM,Customer/constituent relationship management
+remote-access,crm-service,Remote access,Remote desktop and unattended support
+video-conferencing,collaboration,Video conferencing,Meetings and webinars
+chat-messaging,collaboration,Chat & messaging,Team chat
+wiki-docs,collaboration,Wikis & internal docs,Wikis and internal documentation
+project-tracking,case-workflow,Project & issue tracking,Issue and project tracking
+workflow-automation,case-workflow,Workflow automation,Business process and workflow automation
+eforms,case-workflow,Digital forms,Digital forms and submissions
+e-signature,identity-security,E-signature,Electronic signature
+identity-access,identity-security,Identity & access,"SSO, directory, privileged access, password vaults"
+endpoint-security,identity-security,Endpoint security,Endpoint and email protection
+network-security,infrastructure,Network security,"Firewalls, CDN security, network protection"
+infra-monitoring,infrastructure,Infrastructure monitoring,Infrastructure and application monitoring
+log-analytics,data-analytics,Log analytics & SIEM,Log search and SIEM
+bi-dashboards,data-analytics,BI & dashboards,Business intelligence and dashboards
+statistics-analysis,data-analytics,Statistics & data science,Statistical analysis and data science
+database-platform,dev-tools,Database platforms,Database engines and administration
+config-management,infrastructure,Configuration management,Configuration management and automation
+container-platform,infrastructure,Containers & orchestration,Containers and orchestration
+dev-tooling,dev-tools,Developer tooling,"IDEs, libraries, testing, CI"
+web-hosting,web-content,Web hosting,Managed web hosting and web operations
+cms,web-content,Content management (CMS),Content management and websites
+file-sharing,documents,File sharing,Cloud file storage and sharing
+ecm-records,documents,Content & records management,Enterprise content and records management
+document-generation,documents,Document generation,Document assembly and PDF processing
+geospatial-gis,geospatial,Geospatial / GIS,"GIS desktop, server and mapping"
+# ⚠ SPLIT 2026-08-13. A single "asset-facilities" tag conflated at least four
+# functions: Lansweeper (IT/licence discovery), AssetWorks AiM and Archibus
+# (buildings), Trapeze (fleet) and Vision CAMA (property tax assessment, which is
+# not asset management at all). "12 agencies buy asset management" was true of the
+# tag and false of the world. A function tag that groups unlike things is worse
+# than no tag, because the cross-agency view is exactly what it feeds.
+it-asset-management,infrastructure,IT asset & license management,"IT/software asset discovery, licence inventory and entitlement tracking"
+facilities-asset,case-workflow,Facilities & maintenance,"Buildings, space and maintenance management"
+fleet-management,environment-transport,Fleet management,Vehicle and fleet management
+property-assessment,finance-procurement,Property assessment (CAMA),"Property valuation and mass appraisal (CAMA) - a tax function, not asset management"
+finance-erp,finance-procurement,Finance / ERP,"ERP, accounting, procurement"
+legal-case,finance-procurement,Legal case management,Legal case and matter management
+hr-workforce,hr-workforce,HR & workforce,"HR, scheduling, rostering, payroll"
+public-notification,collaboration,Mass notification,"Mass notification, SMS, emergency alerting"
+public-engagement,collaboration,Public engagement,"Consultation, participation, social media"
+digital-signage,web-content,Digital signage,Digital signage and display management
+field-data-collection,data-analytics,Field data collection,Mobile field data capture
+public-safety,case-workflow,Public safety systems,"CAD, evidence, gunshot detection, policing systems"
+health-clinical,case-workflow,Health & clinical systems,Clinical and health record systems
+office-productivity,collaboration,Office productivity,Office suites and productivity
+cloud-iaas,infrastructure,Cloud infrastructure (IaaS),Metered compute/storage/network consumption
+mainframe-legacy,infrastructure,Mainframe & legacy platforms,Mainframe-era platforms and tooling
+design-tooling,web-content,Design tooling,"Design, diagramming and prototyping"

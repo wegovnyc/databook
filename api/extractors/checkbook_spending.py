@@ -20,6 +20,7 @@ from extractors import (
     S3_BUCKET, S3_PREFIX, checkbook_post, clean_text,
     get_current_fiscal_year, upload_to_s3,
 )
+from modules.errfmt import exc_str
 
 # Checkbook NYC XML API
 API_URL = "https://www.checkbooknyc.com/api"
@@ -93,13 +94,13 @@ def download_spending(year: str = None, dry_run: bool = False) -> tuple[str | No
             try:
                 response = checkbook_post(payload, timeout=60, label="spending")
             except requests.exceptions.RequestException as e:
-                print(f"[spending] API error at offset {offset}: {e}")
+                print(f"[spending] API error at offset {offset}: {exc_str(e)}")
                 break
 
             try:
                 root = ET.fromstring(response.content)
             except ET.ParseError as e:
-                print(f"[spending] XML parse error: {e}")
+                print(f"[spending] XML parse error: {exc_str(e)}")
                 break
 
             transactions = root.findall(".//transaction")

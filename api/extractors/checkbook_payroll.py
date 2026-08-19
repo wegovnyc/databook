@@ -30,6 +30,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from extractors import checkbook_post, clean_text, get_current_fiscal_year, upload_to_s3
+from modules.errfmt import exc_str
 
 FILE_NAME = "payroll_data.csv"
 MAX_RECORDS_PER_REQUEST = 20000
@@ -71,7 +72,7 @@ def download_payroll(year: str = None, dry_run: bool = False) -> tuple[str | Non
             resp = checkbook_post(payload, label="payroll")
             root = ET.fromstring(resp.content)
         except (requests.exceptions.RequestException, ET.ParseError) as e:
-            print(f"[payroll] error at offset {offset}: {e}")
+            print(f"[payroll] error at offset {offset}: {exc_str(e)}")
             break
 
         txns = root.findall(".//transaction")

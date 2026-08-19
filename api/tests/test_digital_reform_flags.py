@@ -130,3 +130,63 @@ def test_renewal_chain_flag():
     assert "renewal_chain" not in _flags(
         {"procurement_method": "Competitive Sealed Bid", "award_amount": 5000, "agency": "DOITT"},
         va_stats={"cnt": 2, "since": "2022", "total": 1_000})
+
+
+def test_digital_reform_views_keep_php_block_strings_entity_free():
+    """⚠ THE REGRESSION THIS EXISTS FOR.
+
+    The Build-vs-buy filter read literally, in the live dropdown:
+        High &mdash; easily replaceable
+    because `$buildbuyOptions` held `&mdash;` in a PHP string that the template
+    echoes through Blade's escaping (`{{ $bl }}`), which turns `&` into `&amp;`.
+
+    It was introduced BY a sweep — #66 converted raw em-dashes to entities to
+    keep these pages ASCII-safe, correctly for literal HTML, but this array is
+    echoed escaped. The commit even moved the sort-arrow ternaries into
+    `{!! !!}` for the same reason, so the mechanism was known; this array was
+    just missed. A future ASCII/entity sweep is the likeliest way it recurs.
+
+    Scope is deliberately these two views: every `@php` string in them is
+    echoed escaped, so "no entities in a @php block" is exactly right here.
+    `nycha_cards.blade.php` legitimately holds `&amp;` in a `@php` string and
+    renders it with `{!! !!}`, which is why this is not a tree-wide rule —
+    a guard that has to guess the echo mechanism would be worse than none.
+    """
+    import os
+    import re
+
+    root = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    views = [
+        os.path.join(root, 'app/resources/views/procurement/digital-reform-expiring.blade.php'),
+        os.path.join(root, 'app/resources/views/procurement/digital-reform.blade.php'),
+        os.path.join(root, 'app/resources/views/procurement/digital-reform-licenses.blade.php'),
+    ]
+
+    entity = re.compile(r'&(?:[a-zA-Z][a-zA-Z0-9]{1,10}|#[0-9]{2,6});')
+    # ⚠ Strip comments first, or this fires on the prose that documents the fix.
+    # ⚠⚠ TWO patterns, and the line one must NOT be DOTALL. A single combined
+    # `//.*$|/\*.*?\*/` under `MULTILINE | DOTALL` makes `//.*` swallow the whole
+    # rest of the block — the first draft did exactly that, blanked line 63 along
+    # with everything after it, and passed with the bug reintroduced.
+    line_comment = re.compile(r'//[^\n]*')
+    block_comment = re.compile(r'/\*.*?\*/', re.DOTALL)
+
+    scanned, offenders = 0, []
+    for path in views:
+        assert os.path.exists(path), f"guard points at a missing view: {path}"
+        src = open(path, encoding='utf-8').read()
+        # Every @php ... @endphp block, with real line numbers preserved.
+        for block in re.finditer(r'@php(.*?)@endphp', src, re.DOTALL):
+            scanned += 1
+            base = src[:block.start()].count('\n') + 1
+            body = line_comment.sub('', block_comment.sub('', block.group(1)))
+            for i, line in enumerate(body.split('\n')):
+                hit = entity.search(line)
+                if hit:
+                    offenders.append(f"{os.path.basename(path)}:{base + i}: {hit.group(0)} in {line.strip()[:80]}")
+
+    # ⚠ A guard that scans nothing passes. Both views carry a @php block.
+    assert scanned >= 2, f"scanned only {scanned} @php blocks — the guard stopped looking"
+    assert not offenders, (
+        "HTML entity in a @php string that Blade will escape (renders literally):\n  "
+        + "\n  ".join(offenders))

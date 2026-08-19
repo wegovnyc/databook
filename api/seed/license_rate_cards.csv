@@ -1,0 +1,20 @@
+family,unit,list_price_usd,source_url,as_of,note
+# PUBLIC LIST PRICES for the benchmarkable hosting class.
+#
+# ⚠⚠ A PRICE WITHOUT A DATE READS LIKE A MEASUREMENT. Every row needs source_url
+# AND as_of, and a guard rejects rows missing either. Vendor pricing changes
+# quietly; an undated figure on a public page is a claim we cannot defend.
+#
+# ⚠ WHAT THIS CANNOT DO. There are NO seat, site or unit counts anywhere in the
+# contract data. So the page shows the rate card BESIDE the spend and asks the
+# question; it must never compute "N times overpriced", because there is nothing
+# to divide by. Stating the list price is the contribution -- doing the division
+# would be inventing the denominator.
+#
+# Only commodity hosting with a published rate card belongs here. Bespoke hosted
+# platforms (Axon Evidence, ShotSpotter, Ivalua) are also class managed-hosting
+# but have no public price, so they get no row -- an absent row is honest.
+WP Engine,per site per month (Managed WordPress),20,https://wpengine.com/plans/,2026-08-13,"Entry Startup plan list price. Scales with sites and monthly visits; Premium/Enterprise tiers are quote-based. $177K over 4 contracts invites the arithmetic - but the site count is not in our data."
+Pantheon,per site per month (Performance),41,https://pantheon.io/plans,2026-08-13,"Basic plan list price. $681K across 2 contracts. Same arithmetic, four times the value."
+Box,per user per month (Business),15,https://www.box.com/pricing,2026-08-13,"Business tier list. $656K over 8 contracts across 3 agencies; per-seat cost is the comparison, and the seat count is not in our data."
+Zoom,per user per month (Business),21.99,https://zoom.com/en/products/collaboration-tools/pricing/,2026-08-13,$1.23M family total. Listed for the same reason as Box.

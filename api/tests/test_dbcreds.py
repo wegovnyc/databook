@@ -129,3 +129,59 @@ def test_settings_prefers_environment_then_defaults(tmp_path, monkeypatch):
 def test_settings_port_is_an_int(monkeypatch):
     monkeypatch.setenv("POSTGRES_PORT", "6543")
     assert dbcreds.settings()["port"] == 6543
+
+
+def test_settings_survives_a_config_with_no_pwd_key(monkeypatch):
+    """A defaults dict WITHOUT 'pwd' must resolve, not raise KeyError.
+
+    This is the production shape since the credential moved to Docker secrets:
+    #171 deleted `pwd:` from the box's api/env.yaml and made .env the single
+    source of truth. Four call sites kept reading `Config.db['pwd']` by
+    subscript and so raised `KeyError: 'pwd'` on prod from 2026-07-30 —
+    /pipeline/briefing (cache never built), /pipeline/dataset-counts (swallowed
+    it and served zeros), and both CSV importers, where it surfaced as the
+    normalizer's "500 Internal Server Error" from /import-csv.
+    """
+    monkeypatch.setenv("POSTGRES_PASSWORD", "from-env")
+    s = dbcreds.settings({"user": "databook_api", "dbname": "databook",
+                          "host": "postgres"})     # note: no "pwd"
+    assert s["password"] == "from-env"
+    assert s["user"] == "databook_api"
+    # Exactly the asyncpg.connect() keyword names, so callers can **-expand it.
+    assert set(s) == {"user", "password", "database", "host", "port"}
+
+
+def test_no_api_source_reads_a_credential_key_by_subscript():
+    """Fail the build if any api source resolves a credential outside dbcreds.
+
+    Direction matters. A test asserting dbcreds *itself* behaves correctly
+    cannot see a call site that never calls dbcreds — which is exactly how the
+    four `Config.db['pwd']` reads survived the #171 migration and broke prod.
+    So this scans for the banned PATTERN instead of checking an approved list,
+    the same shape as the orgfilter guard in test_adopt_nyc_orgs.py.
+
+    Reading these keys with .get() and a fallback is fine, and dbcreds.py is
+    itself exempt — it is the one place allowed to know the key names.
+    """
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    # ['pwd'] / ["password"] / ['pwd'] off any object, e.g. Config.db['pwd'].
+    banned = re.compile(r"""\[\s*['"](?:pwd|password)['"]\s*\]""")
+    exempt = {root / "modules" / "dbcreds.py"}
+
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if path in exempt or "/tests/" in str(path) or "/vendor/" in str(path):
+            continue
+        for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            # Strip comments and docstring prose first, or this guard fires on
+            # its own explanation — the trap the orgfilter guard documents.
+            code = line.split("#", 1)[0]
+            if banned.search(code):
+                offenders.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+
+    assert not offenders, (
+        "These read a Postgres credential by subscript instead of via "
+        "modules/dbcreds.py, which raises KeyError once the key leaves "
+        "env.yaml:\n  " + "\n  ".join(offenders))

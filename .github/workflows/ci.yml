@@ -75,6 +75,27 @@ jobs:
           test "$(code http://localhost:8581/docs)"   = "200"
           # NOTE: data-dependent endpoints aren't asserted here — no seed loaded.
           # Load a fixture (scripts/make-local-seed.sh output) to extend this.
+      - name: Federated search SQL parses (needs no seed)
+        run: |
+          set -e
+          # Every /get/search group runs against the EMPTY database in this job,
+          # which is exactly what makes this assertable without a fixture:
+          # Postgres PARSES before it resolves names, so a malformed query still
+          # raises 42601 (syntax_error) while a merely-absent table raises 42P01.
+          # routers/search.py logs the first at ERROR and the second at WARNING,
+          # so an ERROR line from routers.search means SQL that can never work.
+          #
+          # This is the check that was missing when `_people` shipped a LIMIT on
+          # an unparenthesised UNION arm (0e9a614): the people group returned []
+          # on every search for eight weeks, and because a group with no rows is
+          # omitted from the payload entirely, nothing above could see it.
+          curl -s -o /dev/null "http://localhost:8581/get/search?q=smith"
+          curl -s -o /dev/null "http://localhost:8581/get/search/suggest?q=smith"
+          if docker compose logs api | grep -E 'ERROR \[routers\.search\]'; then
+            echo "::error::a federated-search query is malformed — see the line above"
+            exit 1
+          fi
+          echo "search SQL OK — no malformed query in any group"
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --tail=80

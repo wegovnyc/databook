@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 import requests  # noqa: F401  (kept for the RequestException type in callers)
 
 from extractors import checkbook_post, clean_text, get_current_fiscal_year, upload_to_s3
+from modules.errfmt import exc_str
 
 API_URL = "https://www.checkbooknyc.com/api"
 FILE_NAME = "nycha_spending_data.csv"
@@ -68,7 +69,7 @@ def download_spending_nycha(year: str = None, dry_run: bool = False) -> tuple[st
                 resp = checkbook_post(payload, label="nycha-spending")
                 root = ET.fromstring(resp.content)
             except (requests.exceptions.RequestException, ET.ParseError) as e:
-                print(f"[nycha-spending] error at offset {offset}: {e}")
+                print(f"[nycha-spending] error at offset {offset}: {exc_str(e)}")
                 break
 
             txns = root.findall(".//transaction")

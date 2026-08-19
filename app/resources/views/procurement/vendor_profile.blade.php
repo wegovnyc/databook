@@ -9,8 +9,21 @@
     <div class="container" style="padding-top: var(--db-space-3); padding-bottom: var(--db-space-5);">
 
 @php
-    $total = array_reduce($contracts, function($carry, $item) {
-        return $carry + ($item['award_amount'] ?? 0);
+    // ⚠⚠ COMMITTED MONEY ONLY. This used to sum every contract's award_amount,
+    // which folded MASTER-AGREEMENT CEILINGS into a tile captioned "Total
+    // Awarded" — ACCENTURE's book alone carried $52.5M of headroom the City has
+    // never paid, and two vendors on the renewal queue carry a ceiling with
+    // ZERO committed money behind it. A master's purchases are filed under the
+    // order ids agencies raise against it, never under its own.
+    //
+    // The API now serves the split (see modules/contractkind); this reads it
+    // rather than re-deriving the MA/MMA rule in Blade, where no Python guard
+    // could see it. Falls back to summing rows only if the key is absent.
+    $ceiling   = (float) ($spend['ceiling'] ?? 0);
+    $ceilingN  = (int) ($spend['ceiling_count'] ?? 0);
+    $total = $spend['awarded'] ?? array_reduce($contracts, function($carry, $item) {
+        return ($item['amount_kind'] ?? 'committed') === 'ceiling'
+            ? $carry : $carry + ($item['award_amount'] ?? 0);
     }, 0);
     // Checkbook actuals across this vendor's contracts. `available` is false while
     // the API's contract-spend map is still populating — show nothing rather than a
@@ -91,7 +104,16 @@
             <div class="db-stat is-accent">
                 <div class="db-stat-label">Total Awarded @include('procurement.partials.source_badge', ['source' => 'mocs'])</div>
                 <div class="db-stat-value">${{ number_format($total) }}</div>
+                <div class="db-stat-sub">Committed contract value</div>
             </div>
+            @if($ceiling > 0)
+            @php $ceilingSub = $ceilingN . ' master ' . ($ceilingN == 1 ? 'agreement' : 'agreements'); @endphp
+            <div class="db-stat">
+                <div class="db-stat-label">Ceilings, not spend</div>
+                <div class="db-stat-value">{{ $compact($ceiling) }}</div>
+                <div class="db-stat-sub">{{ $ceilingSub }} &mdash; headroom to buy against</div>
+            </div>
+            @endif
             @if($spendOk)
             <div class="db-stat">
                 <div class="db-stat-label">Paid to Date @include('procurement.partials.source_badge', ['source' => 'checkbook'])</div>
@@ -127,6 +149,7 @@
                     <a href="#section-contracts">Contracts <span class="db-badge db-badge-neutral">{{ count($contracts) }}</span></a>
                     <a href="#section-transactions">Transactions</a>
                     @if(!empty($nycha))<a href="#section-nycha">NYCHA Activity</a>@endif
+                    @if(!empty($software))<a href="#section-software">Software</a>@endif
                     @if(!empty($civicOrgs))<a href="#section-civic">Civic Record</a>@endif
                     @if(count($relatedNotices ?? []) > 0)<a href="#notices">City Record Notices <span class="db-badge db-badge-neutral">{{ count($relatedNotices) }}</span></a>@endif
                 </nav>
@@ -573,7 +596,7 @@
                                         <td><a href="{{ route('procurement.contract', ['id' => $c['ctr_id']]) }}" class="fw-semibold">{{ $c['contract_id'] ?? 'N/A' }}</a></td>
                                         <td class="text-muted">{{ $c['contract_title'] ?? '' }}</td>
                                         <td>{{ $c['agency'] ?? 'N/A' }}</td>
-                                        <td class="db-num">${{ number_format($c['award_amount'] ?? 0) }}</td>
+                                        <td class="db-num">${{ number_format($c['award_amount'] ?? 0) }}@if(($c['amount_kind'] ?? 'committed') === 'ceiling')<div class="db-text-muted" style="font-size: .75rem;" title="Master agreement: a ceiling agencies may buy against. Purchases are filed under their own order ids, so this figure is not spend.">ceiling</div>@endif</td>
                                         @if($spendOk)
                                         @php $u = $c['pct_used']; $ur = $u === null ? 0 : min($u / 100, 1.5); @endphp
                                         <td class="db-num">{{ ($c['spent_to_date'] ?? 0) > 0 ? $compact($c['spent_to_date']) : '—' }}</td>
@@ -610,6 +633,58 @@
                      NYCHA is a separate authority: its contracts/payments live in the Checkbook
                      _NYCHA feeds, not the City tables above, so they're rolled up here and
                      linked into the NYCHA explorers on the org profile. --}}
+                {{-- Software products this vendor supplies, from the licence analysis.
+                     ⚠ Links into the UNLISTED Licenses section. That section is unlisted
+                     because its classifications are AI-derived and uncurated; linking to it
+                     from this PUBLIC page makes it reachable by anyone browsing vendors.
+                     The target pages keep noindex, so they stay out of search results, but
+                     this is the one place the two audiences meet. Remove this block to put
+                     it back behind obscurity. --}}
+                @if (!empty($software))
+                    @php
+                        // Precomputed: a Blade directive glued to a word character is not
+                        // compiled, and the page 500s with "unexpected endif".
+                        $swCount = count($software);
+                        $swHeading = $swCount === 1 ? 'Software Product' : 'Software Products';
+                        $swNote = $swCount === 1
+                            ? 'One product family this vendor licenses to the City.'
+                            : $swCount . ' product families this vendor licenses to the City.';
+                    @endphp
+                    <div class="db-card mb-4" id="section-software">
+                        <div class="db-card-head">
+                            <span class="db-card-title"><i class="bi bi-window-stack"></i> {{ $swHeading }}</span>
+                            <span class="db-analysis-badge"><i class="bi bi-stars"></i> Analysis</span>
+                        </div>
+                        <div class="db-card-body">
+                            <p style="font-size: var(--db-text-sm); color: var(--db-text-secondary); margin-bottom: var(--db-space-3);">
+                                {{ $swNote }}
+                                Identified by AI from contract text and <strong>not yet reviewed by a
+                                person</strong>, so treat it as a lead rather than a record.
+                            </p>
+                            <table class="db-table">
+                                <thead><tr><th>Product</th><th>What it does</th><th style="text-align:right;">Contracts</th></tr></thead>
+                                <tbody>
+                                @foreach ($software as $sw)
+                                    <tr>
+                                        <td>
+                                            <a href="{{ route('research.digital-reform.license-family', ['slug' => $sw['slug']]) }}">{{ $sw['family'] }}</a>
+                                        </td>
+                                        <td style="font-size: var(--db-text-sm); color: var(--db-text-secondary);">
+                                            @if(!empty($sw['summary']))
+                                                {{ $sw['summary'] }}
+                                            @else
+                                                <span style="color: var(--db-text-muted); font-style: italic;">Not described &mdash; the contract text was too vague to summarise</span>
+                                            @endif
+                                        </td>
+                                        <td style="text-align:right;">{{ number_format($sw['contracts']) }}</td>
+                                    </tr>
+                                @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                @endif
+
                 @if (!empty($civicOrgs))
                     @php
                         // Track B. Precomputed: a Blade directive glued to a word

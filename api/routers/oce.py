@@ -15,6 +15,35 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from modules.postgrex.asyncmodel import PostgresModelAsync
 from modules.duckpool import to_duckdb_thread
+from modules.errfmt import exc_str
+# ⚠ The ONE owner of what "digital" means. Seven call sites used to interpolate
+# their own vendor_tags IN-lists; the scope (and the tag->derived migration
+# gate) now lives in modules/digitalscope.py. Do not query vendor_tags here.
+from modules import digitalscope
+# ⚠ The ONE owner of whether a contract's amount is committed money or a CEILING
+# an agency may buy against. Three surfaces used to make that judgement
+# separately (the queue headline, the vendor profile's contract list, and the
+# lock-in denominator) and none of them made it at all — so 43% of the queue's
+# headline was ceiling money captioned as spend. Do not re-derive the MA/MMA
+# rule here; `startswith("MA")` silently misses MMA, which is $23.4B.
+from modules import contractkind
+# ⚠ Purchase-class resolution (product grain, family fallback). The Renewal Queue
+# and the Licenses page MUST resolve a contract's class through the same module or
+# they can disagree about which question a contract deserves — which is how $6.8M
+# of AWS ended up rated "low replaceability" and invisible.
+from modules import licenseclass
+# ⚠ The shared "expiring" window. Both pages used to type the horizon themselves.
+from modules import licensewindow
+# ⚠ Vendor-name -> supplier id as a MAP, never a join. See the module docstring:
+# 48 names hold >1 row in `vendors`, and the join duplicated a contract.
+from modules import vendorids
+# ⚠ The Overview's headline lens. The segment axis and the drill-down predicate live
+# in ONE module so the bar and the filtered table cannot disagree about what a
+# segment contains — see its docstring for why "licences" is not a function.
+from modules import techsegments
+# ⚠ Unregistered purchasing vehicles. Section-level, `ceiling` never `value`, and
+# never merged into a total.
+from modules import pipelinevehicles
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +313,7 @@ def _get_checkbook_summary() -> dict:
             ]
         }
     except Exception as e:
-        print(f"Checkbook summary error: {e}")
+        print(f"Checkbook summary error: {exc_str(e)}")
         return {'total': 0, 'transactions': 0, 'by_year': []}
     finally:
         con.close()
@@ -368,7 +397,7 @@ async def get_dashboard_stats():
         stats['agencies'] = oce_stats['agencies']
         stats['awarded'] = oce_stats['awarded']
     except Exception as e:
-        logger.error(f"OCE stats query failed: {e}")
+        logger.error(f"OCE stats query failed: {exc_str(e)}")
         stats = {'contracts': 0, 'vendors': 0, 'solicitations': 0, 'agencies': 0, 'awarded': 0}
         oce_stats = {}
     
@@ -428,7 +457,7 @@ async def refresh_dashboard_cache():
         await get_dashboard_stats()
         logger.info("[cache] Dashboard stats cache refreshed successfully")
     except Exception as e:
-        logger.error(f"[cache] Failed to refresh dashboard stats: {e}")
+        logger.error(f"[cache] Failed to refresh dashboard stats: {exc_str(e)}")
 
 
 async def refresh_digital_reform_cache():
@@ -443,7 +472,7 @@ async def refresh_digital_reform_cache():
         await get_digital_reform_all()  # default params = page 1 for all sections
         logger.info("[cache] Digital reform cache warmed successfully")
     except Exception as e:
-        logger.error(f"[cache] Failed to warm digital reform cache: {e}")
+        logger.error(f"[cache] Failed to warm digital reform cache: {exc_str(e)}")
 
 @router.get("/vendors")
 async def list_vendors(
@@ -565,7 +594,8 @@ async def _notices_for_epins(epins: list) -> list:
             "url": f"https://a856-cityrecord.nyc.gov/RequestDetail/{n['rid']}",
         } for n in (rows or [])]
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[oce] notices-for-epins query failed: {exc}")
+        # ALERTS: the City Record notices panel on solicitation/contract/vendor pages, gone for everyone.
+        logger.error(f"[oce] notices-for-epins query failed: {exc}")
         return []
 
 
@@ -713,7 +743,8 @@ async def _passport_profile(vendor_name: str) -> Optional[dict]:
         if not (probe and probe[0].get("installed")):
             return None
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[oce] PASSPort sub-table probe failed: {exc}")
+        # ALERTS: this probe gates the WHOLE PASSPort block (principals, ratings, entity) for every vendor.
+        logger.error(f"[oce] PASSPort sub-table probe failed: {exc}")
         return None
 
     async def q(sql: str, params: list) -> list:
@@ -1050,7 +1081,7 @@ async def _passport_as_of() -> str:
 
 
 @router.get("/vendor/{id}")
-async def get_vendor(id: str):
+async def get_vendor(id: str, response: Response):
     """Get a single vendor profile with their contracts.
 
     Why: The Blade template (vendor_profile.blade.php) uses simplified field
@@ -1074,32 +1105,81 @@ async def get_vendor(id: str):
         'corporate_structure': v.get('Corporate Structure', ''),
     }
 
-    contracts = await PostgresModelAsync.select_safe("SELECT * FROM contracts WHERE vendor_name = $1 ORDER BY award_amount DESC NULLS LAST", [v['Vendor Name']])
+    # ⚠⚠ ONE ROW PER CONTRACT, NOT PER AMENDMENT. `contracts` carries a row per
+    # amendment / change order — 53,260 rows for 36,421 distinct contract_ids,
+    # 32% duplicates — and the Checkbook spend map is keyed on contract_id. So
+    # listing every row attributed the SAME paid figure to each amendment and then
+    # summed them: ACCENTURE's CT1-057-20228806565 appears 4 times, each carrying
+    # the whole $13.3M, which is how the profile reported paying 197.9% of what it
+    # awarded. Both `paid` and `awarded` were inflated by amendment count.
+    #
+    # Keeps the row with the largest current value, which is the contract's current
+    # state — amendments RESTATE the total, they do not add to it (verified on the
+    # Ivalua contract, whose amendment rows run 2.3 / 3.1 / 3.9 / 6.5 / 17.8 / 37.9
+    # where 37.9 is the whole agreement, not the sum).
+    #
+    # ⚠ Keyed on `coalesce(contract_id, ctid)`, NEVER on contract_id alone: 2,546
+    # rows across 1,866 vendors have NO contract_id (the unregistered rows keyed on
+    # EPIN), and a bare DISTINCT ON would collapse all of one vendor's into a single
+    # row — INFOPEOPLE CORPORATION has 11, so ten real contracts would vanish from
+    # the page. Verified: all 11 survive.
+    contracts = await PostgresModelAsync.select_safe(
+        "SELECT * FROM ("
+        "  SELECT DISTINCT ON (coalesce(contract_id, 'row:' || ctid::text)) * "
+        "  FROM contracts WHERE vendor_name = $1 "
+        "  ORDER BY coalesce(contract_id, 'row:' || ctid::text), "
+        "           current_amount DESC NULLS LAST, award_amount DESC NULLS LAST"
+        ") x ORDER BY award_amount DESC NULLS LAST", [v['Vendor Name']])
 
     # Checkbook ACTUALS for this vendor's contracts, via the #20 normalized-id
     # crosswalk — the same in-process map /oce/contracts already uses. The vendor
     # profile previously showed award amounts only: no paid-to-date anywhere, even
     # though contracts, agencies and NYCHA all show it.
     spend_map = await _get_contract_spend_map()
+    _spend_cache_headers(response, spend_map)
     awarded = paid = 0.0
+    # ⚠ Master-agreement ceilings, kept SEPARATE from awarded money. A master
+    # carries no payments under its own id (measured: 0 of 57 on the renewal
+    # queue, against 88% of ordinary contracts), so counting its ceiling in the
+    # denominator of `pct_used` understates utilisation for every vendor holding
+    # one — ACCENTURE's book alone carries $52.5M of it. See modules/contractkind.
+    ceiling = 0.0
+    ceiling_count = 0
     payments = 0
     for c in (contracts or []):
         key = _normalize_contract_id(c.get('normalized_contract_id') or c.get('contract_id'))
         _add_contract_spend(c, spend_map.get(key) if key else None)
         paid += c.get('spent_to_date') or 0.0
         payments += c.get('payment_count') or 0
+        # Per-row, so the Contracts list can label a ceiling instead of rendering
+        # it identically to committed money.
+        is_ceiling = contractkind.is_master(c.get('contract_id'))
+        c['amount_kind'] = 'ceiling' if is_ceiling else 'committed'
         try:
-            awarded += float(c.get('award_amount') or 0)
+            amt = float(c.get('award_amount') or 0)
         except (TypeError, ValueError):
-            pass
+            amt = 0.0
+        if is_ceiling:
+            ceiling += amt
+            ceiling_count += 1
+        else:
+            awarded += amt
     spend = {
         # `available` is honest about a cold map: _get_contract_spend_map() returns
         # {} on the first call while it populates in the background, and rendering
         # a $0 "paid" tile for a vendor with real payments would be worse than
         # rendering nothing. The frontend gates on this.
         "available": bool(spend_map),
+        # ⚠ `awarded` is now COMMITTED money only, and `pct_used` divides by it.
+        # Including master ceilings in that denominator understated utilisation
+        # for every vendor holding one, because a master's draws are filed under
+        # the purchase orders agencies raise against it, never under its own id.
         "awarded": awarded, "paid": paid, "payments": payments,
         "pct_used": round(paid / awarded * 100, 1) if awarded > 0 else None,
+        # Reported beside it, never added into it — the Overview's pipeline block
+        # established this convention: name the key `ceiling` so it resists
+        # being summed with money.
+        "ceiling": ceiling, "ceiling_count": ceiling_count,
     }
 
     # SBS certified-business profile (what the firm does, contact, capacity, past
@@ -1175,6 +1255,38 @@ async def get_vendor(id: str):
         # the vendor profile.
         logger.warning(f"[oce] org crosswalk lookup failed for {id}: {exc}")
 
+    # Software product families this vendor supplies, for the "Software
+    # Products" section. Optional and independently guarded: the licence tables
+    # are derived, so a fresh environment simply has none and the section
+    # does not render.
+    # ⚠ Scoped to THIS vendor's own contracts by contract_id, not by name --
+    # the name join already happened upstream when the profile was resolved,
+    # and re-matching on the name here would risk a different answer.
+    software = []
+    try:
+        software = await PostgresModelAsync.select_safe("""
+            WITH mine AS (
+                SELECT DISTINCT c.contract_id
+                FROM contracts c
+                WHERE lower(trim(c.vendor_name)) = (
+                    SELECT lower(trim("Vendor Name")) FROM vendors
+                    WHERE "PASSPort Supplier-ID" = $1 LIMIT 1)
+                  AND c.contract_id IS NOT NULL
+            )
+            SELECT lf.family, lf.slug,
+                   count(DISTINCT e.contract_id)      AS contracts,
+                   max(d.summary)                     AS summary
+            FROM digital_contract_enrichment e
+            JOIN mine m       ON m.contract_id = e.contract_id
+            JOIN license_family lf ON lf.product_raw = e.license_product
+            LEFT JOIN license_family_description d ON d.family = lf.family
+            WHERE e.is_license AND NOT lf.is_generic
+            GROUP BY lf.family, lf.slug
+            ORDER BY count(DISTINCT e.contract_id) DESC, lf.family
+        """, [id]) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.info(f"[oce] licence families unavailable for {id}: {exc_str(exc)}")
+
     return {
         "vendor": vendor,
         "contracts": contracts or [],
@@ -1185,7 +1297,8 @@ async def get_vendor(id: str):
         "dos": dos,
         "related_notices": related_notices,
         "nycha": nycha,
-        "civic_orgs": civic
+        "civic_orgs": civic,
+        "software": software,
     }
 
 
@@ -1316,6 +1429,127 @@ def _query_contract_spend_map(target_keys) -> dict:
     return out
 
 
+# A program is a handful of contracts; 4,721 is a calendar. Co-termination is
+# only shown for groups at or under this size.
+_COTERM_MAX_GROUP = 10
+
+
+async def _related_contracts(ctr_id: str, vendor: str, agency: str,
+                             end_date: str) -> dict:
+    """Other contracts a reader of THIS contract should see, in two clearly
+    separate kinds. Never merged, because they carry different evidential weight.
+
+    `same_vendor` is a FACT: the same vendor holds these at the same agency. The
+    renewal queue already computes vendor concentration ("this vendor holds $189M
+    citywide") but publishes it as a NUMBER on a different page, so the claim was
+    never traversable from the contract it is made about.
+
+    `co_terminating` is CIRCUMSTANTIAL and labelled as such. Contracts ending on
+    the same day at the same agency are often one program — MOCS's PASSPort is
+    5 contracts / $78.1M all ending 04/27/2027, of which the queue previously
+    showed one row with no indication a $37.9M platform licence expires with it.
+    ⚠ But it is NOT evidence of a shared program, and the page must not say it
+    is: see the standing rule against asserting a product identity from
+    co-termination plus a shared agency.
+
+    ⚠⚠ TWO RULES MAKE THE SECOND SIGNAL USABLE AT ALL, and without them it is
+    almost pure noise. Measured across all 56,806 contracts:
+      * 46,607 contracts co-terminate with a different vendor at the same agency;
+      * the largest group is **4,721 contracts** (DYCD, 06/30/2023), then 1,873,
+        1,835, 1,751 — and EVERY oversized group lands on **06/30**, the NYC
+        fiscal-year boundary, where a shared end date carries no information.
+    So: groups larger than _COTERM_MAX_GROUP are dropped, and 06/30 is excluded
+    outright. That leaves 3,488 groups / 12,007 contracts — and PASSPort, at 5,
+    survives. Both rules are stated on the page, because a threshold the reader
+    cannot see is indistinguishable from an opinion.
+    """
+    out = {"same_vendor": [], "co_terminating": [],
+           "coterm_max_group": _COTERM_MAX_GROUP}
+    cols = ("ctr_id, contract_id, contract_title, vendor_name, agency, "
+            "current_amount, award_amount, start_date, end_date")
+    try:
+        if vendor and agency:
+            out["same_vendor"] = [dict(r) for r in (await PostgresModelAsync.select_safe(
+                f"SELECT DISTINCT ON (ctr_id) {cols} FROM contracts "
+                "WHERE vendor_name = $1 AND agency = $2 AND ctr_id <> $3 "
+                "ORDER BY ctr_id, current_amount DESC NULLS LAST LIMIT 25",
+                [vendor, agency, ctr_id]) or [])]
+        # ⚠ `NOT LIKE '06/30/%'` is the fiscal-boundary exclusion; the HAVING is the
+        # size cap. Dropping either re-admits the 4,721-contract group.
+        if agency and end_date and not str(end_date).startswith("06/30"):
+            peers = await PostgresModelAsync.select_safe(
+                f"SELECT DISTINCT ON (ctr_id) {cols} FROM contracts "
+                "WHERE agency = $1 AND end_date = $2 "
+                "ORDER BY ctr_id, current_amount DESC NULLS LAST",
+                [agency, end_date]) or []
+            if 1 < len(peers) <= _COTERM_MAX_GROUP:
+                out["co_terminating"] = [dict(r) for r in peers
+                                         if str(r.get("ctr_id")) != str(ctr_id)]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[contract {ctr_id}] related-contracts lookup failed: {exc_str(exc)}")
+    return out
+
+
+async def _precomputed_spend_map() -> Optional[dict]:
+    """The spend map from `contract_spend`, built offline by
+    build_contract_timeline.py. Returns None when the table is absent or empty, so
+    the caller falls back to the live DuckDB scan.
+
+    ⚠ THIS IS WHAT REMOVES THE ~60s COLD WINDOW. `_populate_contract_spend` scans
+    the whole lake in the background and returns {} meanwhile, so for about a
+    minute after EVERY api restart — including the daily 04:00 cron — every
+    contract page rendered an empty spend section and `/oce/contracts/export` sent
+    `no-store`. A Postgres read of ~31.6k rows is fast enough to do inline, so the
+    map is populated before the first request instead of a minute after it.
+    """
+    try:
+        rows = await PostgresModelAsync.select_safe(
+            "SELECT nkey, spent_to_date, payment_count, first_payment, last_payment, "
+            "raw_variants FROM contract_spend")
+    except Exception as exc:  # noqa: BLE001
+        # WARNING, not ERROR: an absent table is the legitimate state before the
+        # first build, and the DuckDB path still serves the page.
+        logger.warning(f"[contracts] precomputed spend map unavailable: {exc_str(exc)}")
+        return None
+    if not rows:
+        return None
+    return {r["nkey"]: {"spent_to_date": float(r["spent_to_date"] or 0),
+                        "payment_count": int(r["payment_count"] or 0),
+                        "first_payment": r["first_payment"],
+                        "last_payment": r["last_payment"],
+                        "raw_variants": list(r["raw_variants"] or [])}
+            for r in rows if r["nkey"]}
+
+
+async def _precomputed_contract_detail(key: str) -> Optional[dict]:
+    """One contract's timeline + payee rollup from Postgres, or None to fall back.
+
+    ⚠ Returns None — not an empty detail — when the contract has no precomputed
+    rows, because those two states are different and only one of them should
+    trigger the Parquet scan. A contract registered since the last lake refresh
+    genuinely has no rows here and must still render.
+    """
+    try:
+        tl = await PostgresModelAsync.select_safe(
+            "SELECT month, total FROM contract_timeline WHERE nkey = $1 ORDER BY month",
+            [key])
+        pv = await PostgresModelAsync.select_safe(
+            "SELECT payee_name, sub_vendor, prime, spent, n FROM contract_payees "
+            "WHERE nkey = $1 ORDER BY rank", [key])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[contract] precomputed detail unavailable: {exc_str(exc)}")
+        return None
+    if not tl and not pv:
+        return None
+    return {
+        "timeline": {"labels": [r["month"] for r in tl],
+                     "values": [float(r["total"] or 0) for r in tl]},
+        "vendors": [{"payee": r["payee_name"], "sub_vendor": r["sub_vendor"],
+                     "prime_vendor": r["prime"], "spent": float(r["spent"] or 0),
+                     "payments": int(r["n"] or 0)} for r in pv],
+    }
+
+
 _contract_spend_populating = False  # guards against concurrent background scans
 
 
@@ -1339,7 +1573,8 @@ async def _populate_contract_spend() -> None:
         _contract_spend_cache['ts'] = time.time()
         logger.info(f"[contracts] spend map ready ({len(m)} contracts, {len(targets)} targets)")
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[contracts] spend-map build failed: {exc}")
+        # ALERTS: no spend/utilization on any contract, and "no spend" looks identical to "$0 spent".
+        logger.error(f"[contracts] spend-map build failed: {exc}")
     finally:
         _contract_spend_populating = False
 
@@ -1352,10 +1587,48 @@ async def _get_contract_spend_map() -> dict:
     c = _contract_spend_cache
     if c['data'] is not None and (time.time() - c['ts']) < CONTRACT_SPEND_CACHE_TTL:
         return c['data']
+    # ⚠ PRECOMPUTE FIRST, DuckDB only as a fallback. Reading ~31.6k rows from
+    # Postgres is fast enough to do inline, which is what closes the cold window;
+    # the background scan stays for a fresh environment where the builder has not
+    # run yet, and is deliberately NOT deleted (see build_contract_timeline.py).
+    pre = await _precomputed_spend_map()
+    if pre:
+        c['data'] = pre
+        c['ts'] = time.time()
+        return pre
     if not _contract_spend_populating:
         _contract_spend_populating = True
         asyncio.create_task(_populate_contract_spend())
     return c['data'] or {}
+
+
+def _spend_cache_headers(response: Response, spend_map: dict) -> None:
+    """Mark a response built from the contract spend map as cacheable, or not.
+
+    ⚠ THE MAP IS EMPTY FOR ~1 MINUTE AFTER EVERY api RESTART, including the daily
+    04:00 cron. `_get_contract_spend_map()` is deliberately non-blocking: it kicks
+    off a background scan and returns `{}` meanwhile, and callers render nothing
+    rather than a false $0. That is correct for a live request and WRONG to cache —
+    Cloudflare's edge TTL would pin an empty spend section for the whole TTL, so a
+    routine restart could blank the figures on every contract page for 10 minutes.
+    Measured 2026-08-04: `/oce/contract/{id}` went 0.580s -> 0.044s once cached, so
+    the cache is worth keeping; this is what makes it safe.
+
+    A cold map is the one state where the response is correct but INCOMPLETE, and
+    incomplete is exactly what must not be stored. `no-store` (not `no-cache`)
+    because we want it neither kept nor revalidated — the next request should build
+    a fresh response, by which point the scan has almost certainly finished.
+
+    ⚠ Has no effect until the Cloudflare Cache Rule uses `respect_origin`; under
+    `override_origin` the edge ignores every header we send here. See the ordering
+    note in api/main.py — the api ships first, the rule flips second.
+    """
+    response.headers["Cache-Control"] = (
+        f"public, max-age={_EDGE_MAX_AGE}" if spend_map else "no-store"
+    )
+
+
+_EDGE_MAX_AGE = int(os.getenv("API_EDGE_MAX_AGE", "600"))
 
 
 def _add_contract_spend(contract: dict, spend: Optional[dict]) -> dict:
@@ -1492,7 +1765,8 @@ async def _attach_contract_meta(rows: list) -> None:
             f"SELECT normalized_contract_id AS n, purpose, expense_category, award_method "
             f"FROM checkbook_contract_meta WHERE normalized_contract_id IN ({ph})", keys)
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[contracts] meta join failed: {exc}")
+        # ALERTS: purpose + expense_category silently blank on every contract row.
+        logger.error(f"[contracts] meta join failed: {exc}")
         meta = []
     mmap = {m['n']: m for m in (meta or [])}
     for c in (rows or []):
@@ -1504,6 +1778,7 @@ async def _attach_contract_meta(rows: list) -> None:
 
 @router.get("/contracts")
 async def list_contracts(
+    response: Response,
     page: int = 1,
     limit: int = 50,
     q: Optional[str] = None,
@@ -1544,6 +1819,7 @@ async def list_contracts(
 
     # Join spent-to-date / utilization from the spending Parquet.
     spend_map = await _get_contract_spend_map()
+    _spend_cache_headers(response, spend_map)
     for c in (rows or []):
         key = _normalize_contract_id(c.get('normalized_contract_id') or c.get('contract_id'))
         _add_contract_spend(c, spend_map.get(key) if key else None)
@@ -1595,10 +1871,16 @@ async def export_contracts(
                     c.get('vendor_name', ''), award, spent, pct, c.get('status', ''),
                     c.get('start_date', ''), c.get('end_date', ''),
                     c.get('procurement_method', ''), c.get('industry', '')])
-    return Response(content=buf.getvalue(), media_type="text/csv", headers={
+    resp = Response(content=buf.getvalue(), media_type="text/csv", headers={
         "Content-Disposition": 'attachment; filename="databook-contracts.csv"',
         "X-Row-Count": str(len(rows)),
     })
+    # ⚠ Set on the RETURNED Response, not an injected one: when a handler returns
+    # its own Response, FastAPI does not merge the injected `response` object's
+    # headers, so the usual pattern would silently do nothing here. Same rule as
+    # the JSON endpoints — a CSV built from a cold spend map must not be stored.
+    _spend_cache_headers(resp, spend_map)
+    return resp
 
 @router.get("/solicitations")
 async def list_solicitations(
@@ -1675,7 +1957,7 @@ async def list_solicitations(
     }
 
 @router.get("/contract/{id}")
-async def get_contract(id: str):
+async def get_contract(id: str, response: Response):
     """Get a single contract by CTR-ID or Contract ID with linked vendor and solicitation."""
     # Try looking up by ctr_id first, then by contract_id
     contract_res = await PostgresModelAsync.select_safe(
@@ -1713,17 +1995,26 @@ async def get_contract(id: str):
     await _attach_contract_meta([contract])
     key = _normalize_contract_id(contract.get('normalized_contract_id') or contract.get('contract_id'))
     spend_map = await _get_contract_spend_map()
+    _spend_cache_headers(response, spend_map)
     _add_contract_spend(contract, spend_map.get(key) if key else None)
     detail = {"timeline": {"labels": [], "values": []}, "vendors": []}
     if key and spend_map.get(key):
-        try:
-            e = spend_map[key]
-            detail = await to_duckdb_thread(
-                _query_contract_detail, key, e.get("first_payment"), e.get("last_payment"),
-                e.get("raw_variants")
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[contract {id}] detail query failed: {exc}")
+        # ⚠ PRECOMPUTED FIRST. The live DuckDB scan is only 53ms on its own, but
+        # under concurrency it starves the event loop and inflates UNRELATED
+        # Postgres spans 2.3x (measured 2026-08-18 with a control endpoint). The
+        # fix is removing it from the request path, not speeding it up.
+        pre = await _precomputed_contract_detail(key)
+        if pre is not None:
+            detail = pre
+        else:
+            try:
+                e = spend_map[key]
+                detail = await to_duckdb_thread(
+                    _query_contract_detail, key, e.get("first_payment"), e.get("last_payment"),
+                    e.get("raw_variants")
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[contract {id}] detail query failed: {exc}")
 
     # MOCS performance evaluations for THIS contract. The evaluations export
     # carries a contract id on every row, and 27.7% of our contracts have at
@@ -1756,7 +2047,13 @@ async def get_contract(id: str):
         "spend_vendors": detail["vendors"],
         "evaluations": evaluations,
         "evaluations_as_of": await _passport_as_of() if evaluations else "",
-        "related_notices": await _notices_for_epins([contract.get('epin', '')])
+        "related_notices": await _notices_for_epins([contract.get('epin', '')]),
+        # Other contracts a reader of this one should see. Two clearly separate
+        # kinds — a fact and a circumstantial signal — never merged. See
+        # _related_contracts for the two rules that make the second usable.
+        "related_contracts": await _related_contracts(
+            str(contract.get('ctr_id') or id), contract.get('vendor_name') or '',
+            contract.get('agency') or '', contract.get('end_date') or ''),
     }
 
 @router.get("/solicitation/{epin}")
@@ -1882,32 +2179,45 @@ def _scan_contract_spend(normed_ids: list) -> dict:
         con.close()
 
 
-async def _populate_digital_spend(vendor_list: str) -> None:
+async def _populate_digital_spend(*scopes) -> None:
     """Background: run the expensive Checkbook Parquet scan and cache the result,
     then clear the digital-reform page cache so the next load includes spend.
-    Never runs on the request path (the scan can take >60s cold)."""
+    Never runs on the request path (the scan can take >60s cold).
+
+    ⚠ THE UNION OF EVERY SCOPE THAT READS THE MAP. There is one cache, shared by
+    the dashboard and the Renewal Queue, and those now run in different scopes —
+    so building it from one of them would leave the other's contracts with
+    `spent = None`, which silently disables the `underused` (shelfware) flag on
+    exactly the rows it exists for. A missing spend figure looks identical to a
+    contract with no spend.
+    """
     global _spend_populating
     try:
-        idrows = await PostgresModelAsync.select_safe(
-            f"""SELECT DISTINCT normalized_contract_id AS n FROM contracts
-                WHERE vendor_name IN ({vendor_list}) AND normalized_contract_id IS NOT NULL""")
-        ids = [str(r['n']).upper() for r in (idrows or []) if r.get('n')]
+        ids = set()
+        for sc in scopes:
+            idrows = await PostgresModelAsync.select_safe(
+                f"""SELECT DISTINCT c.normalized_contract_id AS n FROM {sc.table()} c
+                    WHERE {sc.where('c')} AND c.normalized_contract_id IS NOT NULL""")
+            ids.update(str(r['n']).upper() for r in (idrows or []) if r.get('n'))
+        ids = sorted(ids)
         spend = await to_duckdb_thread(_scan_contract_spend, ids)
         _digital_spend_cache['data'] = spend
         _digital_spend_cache['ts'] = time.time()
         _digital_reform_cache.clear()  # force recompute so spend/utilization show
         logger.info(f"[oce] digital spend map ready ({len(spend)} contracts)")
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[oce] digital spend scan failed: {exc}")
+        # ALERTS: disables the `underused` flag queue-wide; a missing spend figure looks like a real one.
+        logger.error(f"[oce] digital spend scan failed: {exc}")
     finally:
         _spend_populating = False
 
 
-async def _get_digital_spend_map(vendor_list: str) -> dict:
+async def _get_digital_spend_map(*scopes) -> dict:
     """Non-blocking accessor for the digital-contract spend map. Returns the
     cached map when fresh; otherwise kicks off a one-shot background scan and
     returns whatever is on hand ({} the first time) so the page never blocks on
-    the S3 Parquet read. Shared across all page-filter combinations."""
+    the S3 Parquet read. Shared across all page-filter combinations — and across
+    scopes, hence the *scopes union in _populate_digital_spend."""
     global _spend_populating
     c = _digital_spend_cache
     fresh = c['data'] is not None and (time.time() - c['ts']) < DIGITAL_REFORM_CACHE_TTL
@@ -1915,7 +2225,7 @@ async def _get_digital_spend_map(vendor_list: str) -> dict:
         return c['data']
     if not _spend_populating:
         _spend_populating = True
-        asyncio.create_task(_populate_digital_spend(vendor_list))
+        asyncio.create_task(_populate_digital_spend(*scopes))
     return c['data'] or {}
 
 # "Build-your-own candidate" heuristic: services the city could plausibly stand
@@ -1949,6 +2259,34 @@ def _build_your_own_reason(text: str) -> Optional[str]:
     return None
 
 
+# ⚠⚠ THE QUESTION "COULD THE CITY BUILD THIS?" ONLY MAKES SENSE FOR ONE KIND OF
+# PURCHASE. Asked of hosting, cloud, support tiers or content subscriptions it
+# answers "no" and ends the conversation — which is precisely how Amazon Web
+# Services sat at $6.80M rated `low` and appeared in no replaceability view on the
+# Licenses page, against a `high` set totalling $10.13M. The Licenses page fixed
+# that by hiding the rating outside `software-licence` and giving every other class
+# its own lever. The queue was still asking every row the same question.
+#
+# So: where a contract HAS a resolved purchase class and that class is not
+# `software-licence`, the build-your-own flag is withdrawn and the class's own
+# lever is flagged instead. The labels are the question a reviewer should actually
+# ask, keyed by licenseclass.LEVER_FOR.
+CLASS_LEVER_LABELS = {
+    "benchmark-then-self-host": "Benchmark the price",
+    "price-and-rightsizing": "Benchmark the price",
+    "is-the-paid-tier-needed": "Is the paid tier needed?",
+    "is-the-content-needed": "Is the content needed?",
+    "scope-and-rate-review": "Scope and rate review",
+}
+
+# The one class where the substitution question is the right question. A row with
+# NO resolved class (every non-licence contract in the queue — staffing, hardware,
+# telecom) keeps the existing behaviour: "could we build this instead of buying a
+# website" is a fair question about a service, and gating those out would delete
+# the flag exactly where the heuristic is most apt.
+SUBSTITUTION_CLASS = "software-licence"
+
+
 _ASCII_MAP = {
     "—": "-", "–": "-", "‒": "-", "−": "-",   # dashes
     "“": '"', "”": '"', "‘": "'", "’": "'",   # smart quotes
@@ -1972,7 +2310,7 @@ def _ascii(s):
 def _review_flags(row: dict, days_to_expiry: Optional[int], has_rebid: bool,
                   vendor_stats: Optional[dict] = None, va_stats: Optional[dict] = None,
                   spent: Optional[float] = None, days_since_start: Optional[int] = None,
-                  enrich: Optional[dict] = None) -> List[dict]:
+                  enrich: Optional[dict] = None, purchase_class: Optional[dict] = None) -> List[dict]:
     """Compute transparent renewal-review flags for one expiring contract.
 
     Each flag is {key, label, reason, severity}. severity drives badge colour
@@ -1981,6 +2319,8 @@ def _review_flags(row: dict, days_to_expiry: Optional[int], has_rebid: bool,
       {cnt, agencies, total} — lock-in signal.
     - va_stats: this vendor+agency relationship {cnt, since, total} — renewal chain.
     - spent: total Checkbook spend on this contract (recent FYs) — utilization.
+    - purchase_class: modules/licenseclass.resolve() output, or None/{} for a
+      contract with no licence family (every non-licence row). Gates flag 1.
     """
     flags: List[dict] = []
     award = float(row.get("award_amount") or 0)
@@ -1990,19 +2330,37 @@ def _review_flags(row: dict, days_to_expiry: Optional[int], has_rebid: bool,
     # 1. Build-your-own candidate (top-priority editorial signal). Prefer the AI
     #    enrichment's build_vs_buy rating (with its rationale); fall back to the
     #    keyword heuristic for any contract not yet classified.
+    #    ⚠ CLASS-GATED — see CLASS_LEVER_LABELS. The reason is computed first and
+    #    the class decides which flag carries it, so a withdrawn build-your-own is
+    #    replaced by the right question rather than by silence.
+    boyo_reason = None
     if enrich and enrich.get("build_vs_buy"):
         if enrich["build_vs_buy"] == "high":
-            flags.append({"key": "build_your_own", "label": "Build-your-own candidate",
-                          "reason": (enrich.get("rationale") or "Likely replaceable with open-source/AI tooling.")
-                                    + " (AI assessment — verify.)",
-                          "severity": "high"})
+            boyo_reason = ((enrich.get("rationale") or "Likely replaceable with open-source/AI tooling.")
+                           + " (AI assessment — verify.)")
     else:
         boyo = _build_your_own_reason(
             f"{row.get('contract_title','')} {row.get('program','')} {row.get('industry','')}")
         if boyo:
+            boyo_reason = (f"Looks like {boyo} — potentially replaceable with "
+                           "open-source/AI tooling. Heuristic; verify.")
+
+    if boyo_reason:
+        pc = purchase_class or {}
+        cls = (pc.get("class") or "").strip()
+        lever = (pc.get("lever") or "").strip()
+        if cls and cls != SUBSTITUTION_CLASS:
+            flags.append({
+                "key": "class_lever",
+                "label": CLASS_LEVER_LABELS.get(lever, "Wrong question asked"),
+                "reason": (f"Rated replaceable, but this is a {cls.replace('-', ' ')} "
+                           f"purchase — “could the City build this?” is the wrong "
+                           f"question for it. The lever is: {lever or 'unclassified'}. "
+                           + boyo_reason),
+                "severity": "med"})
+        else:
             flags.append({"key": "build_your_own", "label": "Build-your-own candidate",
-                          "reason": f"Looks like {boyo} — potentially replaceable with open-source/AI tooling. Heuristic; verify.",
-                          "severity": "high"})
+                          "reason": boyo_reason, "severity": "high"})
 
     # 2. Non-competitive award (renewal/amendment/sole-source/piggyback/etc).
     if method and method.lower() not in COMPETITIVE_PROCUREMENT_METHODS:
@@ -2034,12 +2392,26 @@ def _review_flags(row: dict, days_to_expiry: Optional[int], has_rebid: bool,
     vs = vendor_stats or {}
     vcnt = int(vs.get("cnt") or 0)
     vagencies = int(vs.get("agencies") or 0)
+    # ⚠ The threshold tests COMMITTED money, not ceilings. A vendor whose book is
+    # mostly master-agreement headroom has not been paid that money and should
+    # not trip a concentration test on it. Falls back to `total` when the split
+    # is absent (an older cached payload) so the flag degrades to its previous
+    # behaviour rather than silently vanishing.
     vtotal = float(vs.get("total") or 0)
-    if vagencies >= 6 or vtotal >= 150_000_000 or vcnt >= 25:
+    vcommitted = float(vs.get("committed_total") if vs.get("committed_total") is not None
+                       else vtotal)
+    vceiling = float(vs.get("ceiling_total") or 0)
+    if vagencies >= 6 or vcommitted >= 150_000_000 or vcnt >= 25:
         bits = []
         if vcnt >= 25: bits.append(f"{vcnt} digital contracts")
         if vagencies >= 6: bits.append(f"{vagencies} agencies")
-        if vtotal >= 150_000_000: bits.append(f"${vtotal/1_000_000:.0f}M total")
+        if vcommitted >= 150_000_000:
+            bits.append(f"${vcommitted/1_000_000:.0f}M in committed contracts")
+        # Stated, never added: a ceiling is headroom to buy against, so folding it
+        # into the same figure is the defect this whole change exists to end.
+        if vceiling >= 10_000_000:
+            bits.append(f"a further ${vceiling/1_000_000:.0f}M of master-agreement "
+                        f"ceilings")
         flags.append({"key": "vendor_lock_in", "label": "Vendor lock-in",
                       "reason": "Concentrated dependency — this vendor holds " + ", ".join(bits) + " citywide.",
                       "severity": "info"})
@@ -2086,30 +2458,26 @@ def _review_flags(row: dict, days_to_expiry: Optional[int], has_rebid: bool,
 
 @router.get("/digital-reform/stats")
 async def get_digital_reform_stats():
-    """Get summary stats for Digital Service Reform dashboard."""
-    
-    # Get digital vendor names from vendor_tags
-    tag_rows = await PostgresModelAsync.select_safe(
-        "SELECT vendor_name, classification FROM vendor_tags WHERE tag = 'digital_services'"
-    )
-    if not tag_rows:
+    """Get summary stats for Digital Service Reform dashboard.
+
+    ⚠ Legacy standalone endpoint — the live page reads /digital-reform/all.
+    Kept on the shared scope so it can never disagree with the page; that adds
+    the confirmed-non-tech exclusion it historically lacked."""
+    sc = await digitalscope.load(PostgresModelAsync, logger)
+    if sc.empty:
         return {"count": 0, "total": 0, "vendor_count": 0}
-    
-    digital_vendors = [r['vendor_name'] for r in tag_rows]
-    vendor_list = ", ".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in digital_vendors])
-    
-    # Count contracts and sum spending for digital vendors
+
     stats_query = f"""
-        SELECT COUNT(*) as count, COALESCE(SUM(award_amount), 0) as total
-        FROM contracts 
-        WHERE vendor_name IN ({vendor_list})
+        SELECT COUNT(*) as count, COALESCE(SUM({sc.value('c')}), 0) as total
+        FROM {sc.table()} c
+        WHERE {sc.where('c')}{sc.exclude_nontech('c')}
     """
     stats_rows = await PostgresModelAsync.select_safe(stats_query)
-    
+
     return {
         "count": stats_rows[0]['count'] if stats_rows else 0,
         "total": float(stats_rows[0]['total']) if stats_rows and stats_rows[0]['total'] else 0,
-        "vendor_count": len(digital_vendors)
+        "vendor_count": sc.vendor_count
     }
 
 @router.get("/digital-reform/vendors")
@@ -2119,45 +2487,41 @@ async def get_digital_vendors(
     sort: str = 'amount',
     order: str = 'desc'
 ):
-    """Get paginated list of digital service vendors with contract counts."""
+    """Get paginated list of digital service vendors with contract counts.
+
+    ⚠ Legacy standalone endpoint — the live page reads /digital-reform/all."""
     offset = (max(page, 1) - 1) * limit
-    
-    # Get tagged vendors with their classifications
-    tag_rows = await PostgresModelAsync.select_safe(
-        "SELECT vendor_name, classification, description FROM vendor_tags WHERE tag = 'digital_services'"
-    )
-    if not tag_rows:
+
+    sc = await digitalscope.load(PostgresModelAsync, logger)
+    if sc.empty:
         return {"vendors": [], "total": 0, "page": page, "total_pages": 0}
-    
-    digital_vendors = {r['vendor_name']: r for r in tag_rows}
-    vendor_list = ", ".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in digital_vendors.keys()])
-    
+
     # Get aggregated vendor stats with sorting
     sort_col = 'total' if sort == 'amount' else ('cnt' if sort == 'contracts' else 'vendor_name')
     order_dir = 'DESC' if order == 'desc' else 'ASC'
-    
+
     query = f"""
-        SELECT c.vendor_name, COUNT(*) as cnt, COALESCE(SUM(c.award_amount), 0) as total,
+        SELECT c.vendor_name, COUNT(*) as cnt, COALESCE(SUM({sc.value('c')}), 0) as total,
                v."PASSPort Supplier-ID" as vendor_id
-        FROM contracts c
+        FROM {sc.table()} c
         LEFT JOIN vendors v ON LOWER(c.vendor_name) = LOWER(v."Vendor Name")
-        WHERE c.vendor_name IN ({vendor_list})
+        WHERE {sc.where('c')}
         GROUP BY c.vendor_name, v."PASSPort Supplier-ID"
         ORDER BY {sort_col} {order_dir}
         LIMIT {limit} OFFSET {offset}
     """
     rows = await PostgresModelAsync.select_safe(query)
-    
+
     # Get total count
     count_query = f"""
-        SELECT COUNT(DISTINCT vendor_name) as c FROM contracts WHERE vendor_name IN ({vendor_list})
+        SELECT COUNT(DISTINCT c.vendor_name) as c FROM {sc.table()} c WHERE {sc.where('c')}
     """
     count_rows = await PostgresModelAsync.select_safe(count_query)
     total = count_rows[0]['c'] if count_rows else 0
-    
+
     vendors = []
     for r in rows:
-        tag_info = digital_vendors.get(r['vendor_name'], {})
+        tag_info = sc.meta_for(r['vendor_name'])
         vendors.append({
             'vendor_id': r.get('vendor_id'),
             'vendor_name': r['vendor_name'],
@@ -2181,40 +2545,36 @@ async def get_digital_contracts(
     sort: str = 'date',
     order: str = 'desc'
 ):
-    """Get paginated list of digital service contracts."""
+    """Get paginated list of digital service contracts.
+
+    ⚠ Legacy standalone endpoint — the live page reads /digital-reform/all."""
     offset = (max(page, 1) - 1) * limit
-    
-    # Get digital vendor names
-    tag_rows = await PostgresModelAsync.select_safe(
-        "SELECT vendor_name, classification FROM vendor_tags WHERE tag = 'digital_services'"
-    )
-    if not tag_rows:
+
+    sc = await digitalscope.load(PostgresModelAsync, logger)
+    if sc.empty:
         return {"contracts": [], "total": 0, "page": page, "total_pages": 0}
-    
-    digital_vendors = {r['vendor_name']: r['classification'] for r in tag_rows}
-    vendor_list = ", ".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in digital_vendors.keys()])
-    
+
     # Map sort column
     sort_map = {'date': 'start_date', 'amount': 'award_amount', 'vendor': 'vendor_name', 'end_date': 'end_date'}
     sort_col = sort_map.get(sort, 'start_date')
     order_dir = 'DESC' if order == 'desc' else 'ASC'
-    
+
     query = f"""
         SELECT c.contract_id, c.ctr_id, c.contract_title, c.vendor_name, c.agency, c.start_date, c.end_date, c.award_amount,
                v."PASSPort Supplier-ID" as vendor_id
-        FROM contracts c
+        FROM {sc.table()} c
         LEFT JOIN vendors v ON LOWER(c.vendor_name) = LOWER(v."Vendor Name")
-        WHERE c.vendor_name IN ({vendor_list})
+        WHERE {sc.where('c')}
         ORDER BY c.{sort_col} {order_dir} NULLS LAST
         LIMIT {limit} OFFSET {offset}
     """
     rows = await PostgresModelAsync.select_safe(query)
-    
+
     # Get total count
-    count_query = f"SELECT COUNT(*) as c FROM contracts WHERE vendor_name IN ({vendor_list})"
+    count_query = f"SELECT COUNT(*) as c FROM {sc.table()} c WHERE {sc.where('c')}"
     count_rows = await PostgresModelAsync.select_safe(count_query)
     total = count_rows[0]['c'] if count_rows else 0
-    
+
     contracts = []
     for r in rows:
         contracts.append({
@@ -2227,9 +2587,9 @@ async def get_digital_contracts(
             'start_date': r['start_date'],
             'end_date': r['end_date'],
             'award_amount': float(r['award_amount'] or 0),
-            'classification': digital_vendors.get(r['vendor_name'], 'Digital')
+            'classification': sc.meta_for(r['vendor_name']).get('classification') or 'Digital'
         })
-    
+
     return {
         "contracts": contracts,
         "total": total,
@@ -2244,64 +2604,75 @@ async def get_expiring_digital_contracts(
     sort: str = 'date',
     order: str = 'asc'
 ):
-    """Get digital service contracts expiring in the next 5 years."""
+    """Get digital service contracts expiring in the next 5 years.
+
+    ⚠ Legacy standalone endpoint — the live page reads /digital-reform/all.
+    ⚠ On the QUEUE's scope, not the dashboard's: an expiring-contracts endpoint
+    that disagreed with the Renewal Queue would be a second answer to the same
+    question, which is the whole defect this change is closing. Its own window
+    (5 years) is left alone — it is not the queue's window and never was.
+    """
     offset = (max(page, 1) - 1) * limit
-    
-    tag_rows = await PostgresModelAsync.select_safe(
-        "SELECT vendor_name, classification FROM vendor_tags WHERE tag = 'digital_services'"
-    )
-    if not tag_rows:
+
+    sc = await digitalscope.load(PostgresModelAsync, logger,
+                                 mode_override=digitalscope.queue_mode())
+    if sc.empty:
         return {"contracts": [], "total": 0, "page": page, "total_pages": 0}
-    
-    digital_vendors = {r['vendor_name']: r['classification'] for r in tag_rows}
-    vendor_list = ", ".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in digital_vendors.keys()])
-    
+
     # Date filter: today to 5 years from now
     # end_date is stored as MM/DD/YYYY format, so we need to convert for comparison
     order_dir = 'ASC' if order == 'asc' else 'DESC'
     # Only the text end_date column may be parsed with TO_DATE; award_amount is
     # numeric (double precision) and must be sorted raw, else to_date() errors.
     order_expr = "TO_DATE(c.end_date, 'MM/DD/YYYY')" if sort == 'date' else "c.award_amount"
-    
+
+    # ⚠⚠ NO `LEFT JOIN vendors` — and this one is a correction to #244, which put
+    # this endpoint on the queue's scope precisely so it could not be "a second
+    # answer to the same question", then left the duplicating join in place. With
+    # the join, one row of this PAGINATED result was a duplicate while `count_query`
+    # below (which has no join) reported the undeduplicated total — so the endpoint
+    # disagreed both with the page and with its own `total`.
     query = f"""
-        SELECT c.contract_id, c.ctr_id, c.contract_title, c.vendor_name, c.agency, c.start_date, c.end_date, c.award_amount,
-               v."PASSPort Supplier-ID" as vendor_id
-        FROM contracts c
-        LEFT JOIN vendors v ON LOWER(c.vendor_name) = LOWER(v."Vendor Name")
-        WHERE c.vendor_name IN ({vendor_list})
+        SELECT c.contract_id, c.ctr_id, c.contract_title, c.vendor_name, c.agency, c.start_date, c.end_date, c.award_amount
+        FROM {sc.table()} c
+        WHERE {sc.where('c')}
           AND c.end_date IS NOT NULL
           AND LENGTH(c.end_date) = 10
           AND TO_DATE(c.end_date, 'MM/DD/YYYY') >= CURRENT_DATE
           AND TO_DATE(c.end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
-        ORDER BY {order_expr} {order_dir} NULLS LAST
+        ORDER BY {order_expr} {order_dir} NULLS LAST, c.contract_id ASC
         LIMIT {limit} OFFSET {offset}
     """
     rows = await PostgresModelAsync.select_safe(query)
-    
+    # ⚠ A tiebreak, because this endpoint is PAGINATED with OFFSET: without it, two
+    # contracts sharing an end_date can swap between page 1 and page 2 and a reader
+    # sees one twice. Same reasoning as the queue's.
+    legacy_vendor_ids = await vendorids.unique_map(PostgresModelAsync, logger)
+
     count_query = f"""
-        SELECT COUNT(*) as c FROM contracts 
-        WHERE vendor_name IN ({vendor_list})
-          AND end_date IS NOT NULL
-          AND LENGTH(end_date) = 10
-          AND TO_DATE(end_date, 'MM/DD/YYYY') >= CURRENT_DATE
-          AND TO_DATE(end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
+        SELECT COUNT(*) as c FROM {sc.table()} c
+        WHERE {sc.where('c')}
+          AND c.end_date IS NOT NULL
+          AND LENGTH(c.end_date) = 10
+          AND TO_DATE(c.end_date, 'MM/DD/YYYY') >= CURRENT_DATE
+          AND TO_DATE(c.end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
     """
     count_rows = await PostgresModelAsync.select_safe(count_query)
     total = count_rows[0]['c'] if count_rows else 0
-    
+
     contracts = []
     for r in rows:
         contracts.append({
             'contract_id': r['contract_id'],
             'ctr_id': r.get('ctr_id'),
             'contract_title': _ascii(r.get('contract_title', '')),
-            'vendor_id': r.get('vendor_id'),
+            'vendor_id': legacy_vendor_ids.get(vendorids.key(r.get('vendor_name'))),
             'vendor_name': r['vendor_name'],
             'agency': r['agency'],
             'start_date': r['start_date'],
             'end_date': r['end_date'],
             'award_amount': float(r['award_amount'] or 0),
-            'classification': digital_vendors.get(r['vendor_name'], 'Digital')
+            'classification': sc.meta_for(r['vendor_name']).get('classification') or 'Digital'
         })
     
     return {
@@ -2315,20 +2686,16 @@ async def get_expiring_digital_contracts(
 async def get_digital_charts():
     """Get chart data for Digital Service Reform dashboard."""
     
-    tag_rows = await PostgresModelAsync.select_safe(
-        "SELECT vendor_name FROM vendor_tags WHERE tag = 'digital_services'"
-    )
-    if not tag_rows:
+    sc = await digitalscope.load(PostgresModelAsync, logger)
+    if sc.empty:
         return {"trend": {"labels": [], "values": []}, "agencies": {"labels": [], "values": []}}
-    
-    vendor_list = ", ".join([f"'{r['vendor_name'].replace(chr(39), chr(39)+chr(39))}'" for r in tag_rows])
-    
+
     # Spending trend by year
     trend_query = f"""
-        SELECT substr(start_date, 7, 4) as year, SUM(award_amount) as total
-        FROM contracts 
-        WHERE vendor_name IN ({vendor_list})
-          AND length(start_date) = 10
+        SELECT substr(c.start_date, 7, 4) as year, SUM({sc.value('c')}) as total
+        FROM {sc.table()} c
+        WHERE {sc.where('c')}
+          AND length(c.start_date) = 10
         GROUP BY year
         ORDER BY year
     """
@@ -2346,11 +2713,11 @@ async def get_digital_charts():
     
     # Top agencies by digital spending
     agency_query = f"""
-        SELECT agency, SUM(award_amount) as total
-        FROM contracts 
-        WHERE vendor_name IN ({vendor_list})
-          AND agency IS NOT NULL AND agency != ''
-        GROUP BY agency
+        SELECT c.agency, SUM({sc.value('c')}) as total
+        FROM {sc.table()} c
+        WHERE {sc.where('c')}
+          AND c.agency IS NOT NULL AND c.agency != ''
+        GROUP BY c.agency
         ORDER BY total DESC
         LIMIT 8
     """
@@ -2364,13 +2731,13 @@ async def get_digital_charts():
     # Expiring contracts by year (next 5 years)
     # end_date is stored as MM/DD/YYYY format
     expiring_query = f"""
-        SELECT substr(end_date, 7, 4) as year, SUM(award_amount) as total
-        FROM contracts 
-        WHERE vendor_name IN ({vendor_list})
-          AND end_date IS NOT NULL
-          AND LENGTH(end_date) = 10
-          AND TO_DATE(end_date, 'MM/DD/YYYY') >= CURRENT_DATE
-          AND TO_DATE(end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
+        SELECT substr(c.end_date, 7, 4) as year, SUM({sc.value('c')}) as total
+        FROM {sc.table()} c
+        WHERE {sc.where('c')}
+          AND c.end_date IS NOT NULL
+          AND LENGTH(c.end_date) = 10
+          AND TO_DATE(c.end_date, 'MM/DD/YYYY') >= CURRENT_DATE
+          AND TO_DATE(c.end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
         GROUP BY year
         ORDER BY year
     """
@@ -2383,15 +2750,15 @@ async def get_digital_charts():
     
     # Expiring contracts by agency (next 5 years)
     expiring_agencies_query = f"""
-        SELECT agency, SUM(award_amount) as total
-        FROM contracts 
-        WHERE vendor_name IN ({vendor_list})
-          AND end_date IS NOT NULL
-          AND LENGTH(end_date) = 10
-          AND TO_DATE(end_date, 'MM/DD/YYYY') >= CURRENT_DATE
-          AND TO_DATE(end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
-          AND agency IS NOT NULL AND agency != ''
-        GROUP BY agency
+        SELECT c.agency, SUM({sc.value('c')}) as total
+        FROM {sc.table()} c
+        WHERE {sc.where('c')}
+          AND c.end_date IS NOT NULL
+          AND LENGTH(c.end_date) = 10
+          AND TO_DATE(c.end_date, 'MM/DD/YYYY') >= CURRENT_DATE
+          AND TO_DATE(c.end_date, 'MM/DD/YYYY') <= CURRENT_DATE + INTERVAL '5 years'
+          AND c.agency IS NOT NULL AND c.agency != ''
+        GROUP BY c.agency
         ORDER BY total DESC
         LIMIT 8
     """
@@ -2424,7 +2791,9 @@ async def get_digital_reform_all(
     expiring_method: str = '', expiring_min: float = 0,
     expiring_flag: str = '', expiring_category: str = '',
     expiring_license: str = '', expiring_buildbuy: str = '',
-    expiring_shownontech: str = ''
+    expiring_shownontech: str = '', expiring_product: str = '',
+    # The composition bar's drill-down: a segment slug from modules/techsegments.
+    contract_segment: str = ''
 ):
     """Combined digital reform endpoint — fetches vendor tags once, runs all
     queries concurrently. Replaces 5 serial PHP→API calls with 1.
@@ -2452,86 +2821,163 @@ async def get_digital_reform_all(
     contract_order = 'desc' if contract_order == 'desc' else 'asc'
     expiring_order = 'desc' if expiring_order == 'desc' else 'asc'
 
-    # Build cache key from all params
+    # Build cache key from all params. ⚠ The scope mode leads it: the mode only
+    # changes with a restart (which clears this in-memory cache anyway), but a
+    # key that names its scope can never serve tag-mode numbers as derived ones.
     cache_key = (
+        f"{digitalscope.mode()}:{digitalscope.queue_mode()}:"
         f"{vendor_page}:{vendor_limit}:{vendor_sort}:{vendor_order}:{vendor_q}:"
-        f"{contract_page}:{contract_limit}:{contract_sort}:{contract_order}:{contract_q}:{contract_method}:"
+        f"{contract_page}:{contract_limit}:{contract_sort}:{contract_order}:{contract_q}:{contract_method}:{contract_segment}:"
         f"{expiring_page}:{expiring_limit}:{expiring_sort}:{expiring_order}:"
         f"{expiring_year}:{expiring_agency}:{expiring_method}:{expiring_min}:{expiring_flag}:"
-        f"{expiring_category}:{expiring_license}:{expiring_buildbuy}:{expiring_shownontech}"
+        f"{expiring_category}:{expiring_license}:{expiring_buildbuy}:{expiring_shownontech}:"
+        f"{expiring_product}"
     )
     cached = _dr_cache_get(cache_key)
     if cached is not None:
         return cached
 
-    # Single vendor_tags fetch (was repeated 5 times)
-    tag_rows = await PostgresModelAsync.select_safe(
-        "SELECT vendor_name, classification, description FROM vendor_tags WHERE tag = 'digital_services'"
-    )
-    if not tag_rows:
+    # ⚠ TWO scope resolutions, on purpose and temporarily. modules/digitalscope.py
+    # owns what "digital" means; the Renewal Queue is already on the derived scope
+    # while the Overview sections wait for their rebuild, so `sc` serves the
+    # dashboard and `qsc` serves the queue (and the two EXPIRING charts, which
+    # render only on the queue page — a table and the chart above it disagreeing
+    # would be worse than either scope).
+    sc = await digitalscope.load(PostgresModelAsync, logger)
+    qsc = (sc if digitalscope.queue_mode() == sc.mode
+           else await digitalscope.load(PostgresModelAsync, logger,
+                                        mode_override=digitalscope.queue_mode()))
+    # ⚠ BOTH must be empty for the zero-shell. It used to key on the dashboard
+    # scope alone, which would now serve an empty queue whenever `vendor_tags` is
+    # missing — a table the queue's own scope can populate perfectly well.
+    if sc.empty and qsc.empty:
         return {
-            "stats": {"count": 0, "total": 0, "vendor_count": 0},
+            "stats": {"count": 0, "total": 0, "vendor_count": 0,
+                      "active_count": 0, "active_total": 0,
+                      "ended_count": 0, "ended_total": 0},
             "charts": {"trend": {"labels": [], "values": []}, "agencies": {"labels": [], "values": []},
                        "expiring": {"labels": [], "values": []}, "expiring_agencies": {"labels": [], "values": []}},
             "vendors": {"vendors": [], "total": 0, "page": 1, "total_pages": 0},
-            "contracts": {"contracts": [], "total": 0, "page": 1, "total_pages": 0},
+            "contracts": {"contracts": [], "total": 0, "page": 1, "total_pages": 0,
+                          "segment": "", "segment_slug": ""},
+            "composition": {"available": False, "segments": [], "bar": [], "totals": {},
+                            "reason": "no contracts in scope"},
+            "pipeline": {"rows": [], "count": 0, "ceiling": 0, "masters": 0,
+                         "floor": pipelinevehicles.DISPLAY_FLOOR, "vendors": 0},
+            "scope": {"mode": digitalscope.mode(), "positive": False, "vendor_count": 0},
             "expiring": {"contracts": [], "total": 0, "page": 1, "total_pages": 0,
                          "summary": {"count": 0, "total_value": 0, "build_your_own": 0,
+                                     "class_lever": 0,
                                      "non_competitive": 0, "no_rebid": 0, "scope_growth": 0,
                                      "high_value_near_term": 0, "vendor_lock_in": 0,
                                      "underused": 0, "renewal_chain": 0,
-                                     "licenses": 0, "nontech_excluded": 0},
+                                     "licenses": 0, "licenses_value": 0,
+                                     "nontech_excluded": 0},
+                         "scope": {"mode": digitalscope.queue_mode(), "positive": False},
                          "options": {"years": [], "agencies": [], "methods": [], "categories": []}},
             "contract_options": {"methods": []},
         }
 
-    digital_vendors = {r['vendor_name']: r for r in tag_rows}
-    vendor_list = ", ".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in digital_vendors.keys()])
-
-    # Scope all "digital" metrics to digital-RELEVANT contracts: exclude only
-    # contracts the AI explicitly classified non-tech (tech_relevant=false).
-    # Unclassified contracts still count, so the page is never wrong — it tightens
-    # as classification coverage grows (e.g. NYSID's non-digital contracts drop out
-    # once they're classified). Guarded on the enrichment table existing.
-    enr_exists = False
-    try:
-        _chk = await PostgresModelAsync.select_safe("SELECT to_regclass('public.digital_contract_enrichment') AS t")
-        enr_exists = bool(_chk and _chk[0].get('t'))
-    except Exception:  # noqa: BLE001
-        enr_exists = False
-
-    def nondigital_exclude(alias: str) -> str:
-        """SQL fragment excluding AI-confirmed non-tech contracts (or '' if no table)."""
-        if not enr_exists:
-            return ""
-        return (f" AND NOT EXISTS (SELECT 1 FROM digital_contract_enrichment dce "
-                f"WHERE dce.contract_id = {alias}.contract_id AND dce.tech_relevant = false)")
-
-    def is_digital_expr(alias: str) -> str:
-        """Boolean expr: TRUE unless the AI confirmed this contract non-tech."""
-        if not enr_exists:
-            return "TRUE"
-        return (f"NOT EXISTS (SELECT 1 FROM digital_contract_enrichment dce "
-                f"WHERE dce.contract_id = {alias}.contract_id AND dce.tech_relevant = false)")
+    nondigital_exclude = sc.exclude_nontech
+    is_digital_expr = sc.is_digital
 
     # --- Define concurrent query coroutines ---
 
     async def _stats():
-        q = (f"SELECT COUNT(*) as count, COALESCE(SUM(award_amount), 0) as total "
-             f"FROM contracts WHERE vendor_name IN ({vendor_list})" + nondigital_exclude("contracts"))
+        # ⚠ ACTIVE vs ENDED, because the headline is otherwise read as current
+        # exposure and it is not: measured on the derived scope, 3,653 of 4,397
+        # contracts have ALREADY ENDED — 83% by count, 45% by value. The licences
+        # page learned this the hard way (72% of its inventory had ended with
+        # nothing on the page saying so).
+        # ⚠ "Ended" is a positive test on a usable end_date, so a contract with no
+        # parseable date counts as ACTIVE and the page's label says "not known to
+        # have ended". Guessing the other way would quietly shrink the live figure.
+        ended = ("(c.end_date IS NOT NULL AND LENGTH(c.end_date) = 10 "
+                 "AND TO_DATE(c.end_date, 'MM/DD/YYYY') < CURRENT_DATE)")
+        q = (f"SELECT COUNT(*) as count, COALESCE(SUM({sc.value('c')}), 0) as total, "
+             f"COUNT(*) FILTER (WHERE {ended}) as ended_count, "
+             f"COALESCE(SUM({sc.value('c')}) FILTER (WHERE {ended}), 0) as ended_total "
+             f"FROM {sc.table()} c WHERE {sc.where('c')}" + nondigital_exclude("c"))
         rows = await PostgresModelAsync.select_safe(q)
+        r = rows[0] if rows else {}
+        count = r.get('count') or 0
+        total = float(r.get('total') or 0)
+        ended_count = r.get('ended_count') or 0
+        ended_total = float(r.get('ended_total') or 0)
         return {
-            "count": rows[0]['count'] if rows else 0,
-            "total": float(rows[0]['total']) if rows and rows[0]['total'] else 0,
-            "vendor_count": len(digital_vendors)
+            "count": count,
+            "total": total,
+            "vendor_count": sc.vendor_count,
+            "ended_count": ended_count,
+            "ended_total": ended_total,
+            # ⚠ Derived by SUBTRACTION from the same query, never a second predicate.
+            # Two independent definitions of "active" on one page is how the two
+            # expiring figures on the licences page came to disagree.
+            "active_count": count - ended_count,
+            "active_total": total - ended_total,
+        }
+
+    async def _composition():
+        """The Overview's headline: how the technology universe divides up.
+
+        ⚠ ONE ROW PER CONTRACT, one segment per contract — see
+        modules/techsegments. The whole set is pulled once (4,397 rows) and
+        rolled up in Python, so the bar, the table and the segment totals are the
+        same arithmetic rather than three GROUP BYs that can drift apart.
+        """
+        # ⚠ DERIVED SCOPE ONLY, and it says so rather than approximating. Tag mode is
+        # amendment-ROW grain, so a contract with three amendments would be counted
+        # three times in its segment and the bar would not be a partition of
+        # anything. A page that hides the lens on a rollback is honest; one that
+        # shows a triple-counted bar is not.
+        if not sc.enr_exists or sc.mode != "derived":
+            return {"available": False, "segments": [], "bar": [], "totals": {},
+                    "reason": ("the enrichment table is missing" if not sc.enr_exists
+                               else f"composition needs one row per contract; scope is '{sc.mode}'")}
+        q = f"""
+            SELECT {sc.value('c')} AS value, e.is_license, e.function_category,
+                   (c.end_date IS NOT NULL AND LENGTH(c.end_date) = 10
+                    AND TO_DATE(c.end_date, 'MM/DD/YYYY') < CURRENT_DATE) AS ended
+            FROM {sc.table()} c
+            JOIN digital_contract_enrichment e ON e.contract_id = c.contract_id
+            WHERE {sc.where('c')}{nondigital_exclude("c")}
+        """
+        try:
+            rows = await PostgresModelAsync.select_safe(q) or []
+        except Exception as exc:  # noqa: BLE001
+            # ALERTS: the Overview's whole composition bar; `available: False` renders as nothing.
+            logger.error(f"[oce] composition unavailable: {exc_str(exc)}")
+            return {"available": False, "segments": [], "bar": [], "totals": {}}
+        segments, bar = techsegments.rollup([dict(r) for r in rows])
+        return {
+            "available": bool(segments),
+            "segments": segments,
+            "bar": bar,
+            # ⚠ The partition's own closure, in the payload, so the page can be
+            # checked against itself and a guard can assert it adds up.
+            # ⚠⚠ `value` WILL NOT EQUAL `stats.total` TO THE DOLLAR, and that is
+            # arithmetic rather than a gap: `award_amount`/`current_amount` are
+            # Postgres `real` (float32), so the tile's SUM() is accumulated in float32
+            # by Postgres while these segments are summed in float64 by Python over
+            # the very same rows. Measured: $10,610,503,478 here against
+            # $10,610,510,848 there — $7,370 apart on $10.6B, 7e-7 relative, and
+            # invisible at the $0.1M the page prints. The CONTRACT COUNTS match
+            # exactly, which is the check that would actually catch a lost segment.
+            "totals": {
+                "contracts": sum(a["contracts"] for a in segments),
+                "value": sum(a["value"] for a in segments),
+                "segments": len(segments),
+                "in_bar": len([b for b in bar if b.get("slug")]),
+                "bar_floor_share": techsegments.BAR_MIN_SHARE,
+            },
         }
 
     async def _charts():
         # Spending trend
         trend_q = f"""
-            SELECT substr(start_date, 7, 4) as year, SUM(award_amount) as total
-            FROM contracts WHERE vendor_name IN ({vendor_list}) AND length(start_date) = 10
-              {nondigital_exclude("contracts")}
+            SELECT substr(c.start_date, 7, 4) as year, SUM({sc.value('c')}) as total
+            FROM {sc.table()} c WHERE {sc.where('c')} AND length(c.start_date) = 10
+              {nondigital_exclude("c")}
             GROUP BY year ORDER BY year
         """
         trend_rows = await PostgresModelAsync.select_safe(trend_q)
@@ -2546,39 +2992,39 @@ async def get_digital_reform_all(
 
         # Top agencies
         ag_q = f"""
-            SELECT agency, SUM(award_amount) as total FROM contracts
-            WHERE vendor_name IN ({vendor_list}) AND agency IS NOT NULL AND agency != ''
-              {nondigital_exclude("contracts")}
-            GROUP BY agency ORDER BY total DESC LIMIT 8
+            SELECT c.agency, SUM({sc.value('c')}) as total FROM {sc.table()} c
+            WHERE {sc.where('c')} AND c.agency IS NOT NULL AND c.agency != ''
+              {nondigital_exclude("c")}
+            GROUP BY c.agency ORDER BY total DESC LIMIT 8
         """
         ag_rows = await PostgresModelAsync.select_safe(ag_q)
         agencies = {"labels": [r['agency'][:40] for r in (ag_rows or [])],
                     "values": [float(r['total'] or 0) for r in (ag_rows or [])]}
 
-        # Expiring by year
+        # Expiring by year.
+        # ⚠ THE TWO EXPIRING CHARTS USE THE QUEUE'S SCOPE (`qsc`), not the
+        # dashboard's — they render only on the Renewal Queue page, directly above
+        # the table they describe. The window comes from modules/licensewindow so
+        # the chart cannot cover a different span from the table.
         exp_q = f"""
-            SELECT substr(end_date, 7, 4) as year, SUM(award_amount) as total
-            FROM contracts WHERE vendor_name IN ({vendor_list})
-              AND end_date IS NOT NULL AND LENGTH(end_date) = 10
-              AND TO_DATE(end_date, 'MM/DD/YYYY') >= CURRENT_DATE
-              AND TO_DATE(end_date, 'MM/DD/YYYY') < DATE '2030-01-01'
-              {nondigital_exclude("contracts")}
+            SELECT substr(c.end_date, 7, 4) as year, SUM({qsc.value('c')}) as total
+            FROM {qsc.table()} c WHERE {qsc.where('c')}
+              AND {licensewindow.sql_clause('c')}
+              {qsc.exclude_nontech("c")}
             GROUP BY year ORDER BY year
         """
         exp_rows = await PostgresModelAsync.select_safe(exp_q)
         expiring_chart = {"labels": [r['year'] for r in (exp_rows or [])],
                           "values": [float(r['total'] or 0) for r in (exp_rows or [])]}
 
-        # Expiring by agency
+        # Expiring by agency (queue scope — see above).
         exp_ag_q = f"""
-            SELECT agency, SUM(award_amount) as total FROM contracts
-            WHERE vendor_name IN ({vendor_list})
-              AND end_date IS NOT NULL AND LENGTH(end_date) = 10
-              AND TO_DATE(end_date, 'MM/DD/YYYY') >= CURRENT_DATE
-              AND TO_DATE(end_date, 'MM/DD/YYYY') < DATE '2030-01-01'
-              AND agency IS NOT NULL AND agency != ''
-              {nondigital_exclude("contracts")}
-            GROUP BY agency ORDER BY total DESC LIMIT 8
+            SELECT c.agency, SUM({qsc.value('c')}) as total FROM {qsc.table()} c
+            WHERE {qsc.where('c')}
+              AND {licensewindow.sql_clause('c')}
+              AND c.agency IS NOT NULL AND c.agency != ''
+              {qsc.exclude_nontech("c")}
+            GROUP BY c.agency ORDER BY total DESC LIMIT 8
         """
         exp_ag_rows = await PostgresModelAsync.select_safe(exp_ag_q)
         exp_agencies = {"labels": [r['agency'][:40] for r in (exp_ag_rows or [])],
@@ -2587,10 +3033,23 @@ async def get_digital_reform_all(
         return {"trend": trend, "agencies": agencies, "expiring": expiring_chart, "expiring_agencies": exp_agencies}
 
     async def _vendors():
+        """Who the City buys technology from.
+
+        ⚠⚠ "DIGITAL SHARE" IS GONE, and its removal is the point of this rebuild.
+        The column divided a vendor's tagged-digital spend by their TOTAL City
+        spend, which made Inter-Con SECURITY SYSTEMS — a physical-guard company —
+        rank 5th at "100% digital share". Under a scope that admits a contract
+        because the classifier confirmed it is technology, the honest columns are
+        the confirmed ones: how many tech contracts, worth how much. A ratio
+        against unrelated spend answered no question anyone had.
+
+        ⚠ NO `LEFT JOIN vendors` — 48 names hold more than one row there, which
+        listed a vendor twice (measured 183rd in this very table). Ids come from
+        vendorids.unique_map.
+        """
         v_offset = (max(vendor_page, 1) - 1) * vendor_limit
-        # Sort on the DIGITAL metrics by default so multi-line vendors (e.g. NYSID)
-        # whose digital work is a sliver sink instead of topping the list.
-        sort_col = 'dig_total' if vendor_sort == 'amount' else ('dig_cnt' if vendor_sort == 'contracts' else 'vendor_name')
+        sort_col = ('tech_total' if vendor_sort == 'amount'
+                    else ('tech_cnt' if vendor_sort == 'contracts' else 'vendor_name'))
         order_dir = 'DESC' if vendor_order == 'desc' else 'ASC'
         dig = is_digital_expr('c')
         # Optional name search (parameterized — $1 used in both the page + count query).
@@ -2601,35 +3060,65 @@ async def get_digital_reform_all(
             search_clause = " AND LOWER(c.vendor_name) LIKE $1"
         q = f"""
             SELECT c.vendor_name,
-                   COUNT(*) AS total_cnt,
-                   COALESCE(SUM(c.award_amount), 0) AS total_award,
-                   COUNT(*) FILTER (WHERE {dig}) AS dig_cnt,
-                   COALESCE(SUM(c.award_amount) FILTER (WHERE {dig}), 0) AS dig_total,
-                   v."PASSPort Supplier-ID" as vendor_id
-            FROM contracts c
-            LEFT JOIN vendors v ON LOWER(c.vendor_name) = LOWER(v."Vendor Name")
-            WHERE c.vendor_name IN ({vendor_list}){search_clause}
-            GROUP BY c.vendor_name, v."PASSPort Supplier-ID"
-            ORDER BY {sort_col} {order_dir} NULLS LAST
+                   COUNT(*) FILTER (WHERE {dig}) AS tech_cnt,
+                   COALESCE(SUM({sc.value('c')}) FILTER (WHERE {dig}), 0) AS tech_total,
+                   COUNT(DISTINCT c.agency) FILTER (WHERE {dig}) AS agencies
+            FROM {sc.table()} c
+            WHERE {sc.where('c')}{search_clause}
+            GROUP BY c.vendor_name
+            ORDER BY {sort_col} {order_dir} NULLS LAST, c.vendor_name ASC
             LIMIT {vendor_limit} OFFSET {v_offset}
         """
         rows = await PostgresModelAsync.select_safe(q, params)
-        cnt_q = f"SELECT COUNT(DISTINCT c.vendor_name) as c FROM contracts c WHERE c.vendor_name IN ({vendor_list}){search_clause}"
+        cnt_q = f"SELECT COUNT(DISTINCT c.vendor_name) as c FROM {sc.table()} c WHERE {sc.where('c')}{search_clause}"
         cnt_rows = await PostgresModelAsync.select_safe(cnt_q, params)
         total = cnt_rows[0]['c'] if cnt_rows else 0
+
+        page_names = [r['vendor_name'] for r in (rows or []) if r.get('vendor_name')]
+        vendor_ids = await vendorids.unique_map(PostgresModelAsync, logger)
+        # ⚠ WHAT A VENDOR SELLS, DERIVED — not a hand-written reseller seed. The plan
+        # asked for reseller annotations "where curation knows them"; the licence
+        # inventory already knows them, and computing it means the annotation cannot
+        # go stale. Measured: DELL MARKETING LP resolves to 18 licence families
+        # (Microsoft, Red Hat, McAfee, SolarWinds…), which is what makes it visibly a
+        # reseller, while American Traffic Solutions resolves to none.
+        sells = {}
+        if page_names:
+            try:
+                srows = await PostgresModelAsync.select_safe(f"""
+                    SELECT c.vendor_name,
+                           coalesce(lf.family, e.license_product) AS family,
+                           SUM({sc.value('c')}) AS val
+                    FROM {sc.table()} c
+                    JOIN digital_contract_enrichment e ON e.contract_id = c.contract_id
+                    LEFT JOIN license_family lf ON lf.product_raw = e.license_product
+                    WHERE c.vendor_name = ANY($1) AND e.is_license
+                      AND coalesce(lf.family, e.license_product, '') <> ''
+                    GROUP BY 1, 2
+                """, [page_names]) or []
+                for r in srows:
+                    sells.setdefault(r['vendor_name'], []).append(
+                        (r['family'], float(r['val'] or 0)))
+            except Exception as exc:  # noqa: BLE001
+                logger.info(f"[oce] vendor licence families unavailable: {exc_str(exc)}")
+
         vendors_out = []
         for r in (rows or []):
-            tag_info = digital_vendors.get(r['vendor_name'], {})
-            total_award = float(r['total_award'] or 0)
-            dig_total = float(r['dig_total'] or 0)
+            fams = sorted(sells.get(r['vendor_name'], []), key=lambda a: -a[1])
             vendors_out.append({
-                'vendor_id': r.get('vendor_id'), 'vendor_name': r['vendor_name'],
-                'classification': tag_info.get('classification', 'Digital'),
-                'description': tag_info.get('description', ''),
-                # Digital-relevant (primary) + overall (context).
-                'contract_count': r['dig_cnt'], 'total_awarded': dig_total,
-                'total_contract_count': r['total_cnt'], 'total_award_all': total_award,
-                'digital_share': (dig_total / total_award) if total_award > 0 else None,
+                'vendor_id': vendor_ids.get(vendorids.key(r['vendor_name'])),
+                'vendor_name': r['vendor_name'],
+                # ⚠ Named `tech_*`: these count only contracts the classification
+                # confirmed, which is the whole claim the page is making.
+                'contract_count': r['tech_cnt'],
+                'total_awarded': float(r['tech_total'] or 0),
+                'agencies': r['agencies'],
+                # ⚠ CAPPED AT 4, WITH THE FULL COUNT BESIDE IT. Dell resolves to 18;
+                # printing 18 names in a table cell is not an annotation, and
+                # printing 4 without saying "of 18" is the count-before-you-cap
+                # defect this codebase has paid for twice.
+                'sells': [f for f, _ in fams[:4]],
+                'sells_total': len(fams),
             })
         return {"vendors": vendors_out, "total": total, "page": vendor_page,
                 "total_pages": (total + vendor_limit - 1) // vendor_limit if total > 0 else 0}
@@ -2650,45 +3139,86 @@ async def get_digital_reform_all(
         if contract_method.strip():
             params.append(contract_method.strip())
             filt += f" AND c.procurement_method = ${len(params)}"
+        # ⚠ THE COMPOSITION BAR'S DRILL-DOWN. Resolved through modules/techsegments,
+        # never re-derived here: the bar and this filter must be the same definition
+        # or a segment's table will not add up to the segment it was reached from.
+        # An unknown slug resolves to "" and filters nothing, rather than emptying
+        # the table and looking like "no such contracts".
+        seg_name = techsegments.resolve_slug(contract_segment, composition_segments)
+        if seg_name:
+            pred = techsegments.sql_predicate(seg_name, len(params) + 1)
+            if pred:
+                sql_frag, seg_params = pred
+                params.extend(seg_params)
+                filt += (" AND EXISTS (SELECT 1 FROM digital_contract_enrichment e "
+                         f"WHERE e.contract_id = c.contract_id AND {sql_frag})")
         filt += nondigital_exclude("c")  # digital-relevant contracts only
+        # ⚠ NO `LEFT JOIN vendors` — see _vendors. It also made `total` (computed
+        # below without the join) disagree with the rows on this very table.
+        # ⚠ A LEFT JOIN on the enrichment is safe here and ONLY here because
+        # `digital_contract_enrichment` has `PRIMARY KEY (contract_id)` — verified on
+        # prod: 36,413 rows, 36,413 distinct ids, 0 duplicates. That is the property
+        # the `vendors` join never had, and the reason to state it rather than assume
+        # it. It gives each row its composition segment, which replaces a
+        # `classification` badge that read the constant "Digital" on every row.
         q = f"""
             SELECT c.contract_id, c.ctr_id, c.contract_title, c.vendor_name, c.agency,
                    c.procurement_method, c.start_date, c.end_date, c.award_amount,
-                   v."PASSPort Supplier-ID" as vendor_id
-            FROM contracts c
-            LEFT JOIN vendors v ON LOWER(c.vendor_name) = LOWER(v."Vendor Name")
-            WHERE c.vendor_name IN ({vendor_list}){filt}
-            ORDER BY c.{sort_col} {order_dir} NULLS LAST
+                   e.is_license, e.function_category
+            FROM {sc.table()} c
+            LEFT JOIN digital_contract_enrichment e ON e.contract_id = c.contract_id
+            WHERE {sc.where('c')}{filt}
+            ORDER BY c.{sort_col} {order_dir} NULLS LAST, c.contract_id ASC
             LIMIT {contract_limit} OFFSET {c_offset}
         """
         rows = await PostgresModelAsync.select_safe(q, params)
-        cnt_q = f"SELECT COUNT(*) as c FROM contracts c WHERE c.vendor_name IN ({vendor_list}){filt}"
+        cnt_q = f"SELECT COUNT(*) as c FROM {sc.table()} c WHERE {sc.where('c')}{filt}"
         cnt_rows = await PostgresModelAsync.select_safe(cnt_q, params)
         total = cnt_rows[0]['c'] if cnt_rows else 0
+        vendor_ids = await vendorids.unique_map(PostgresModelAsync, logger)
         contracts_out = []
         for r in (rows or []):
             contracts_out.append({
                 'contract_id': r['contract_id'], 'ctr_id': r.get('ctr_id'),
                 'contract_title': _ascii(r.get('contract_title', '')),
-                'vendor_id': r.get('vendor_id'), 'vendor_name': r['vendor_name'],
+                'vendor_id': vendor_ids.get(vendorids.key(r.get('vendor_name'))),
+                'vendor_name': r['vendor_name'],
                 'agency': r['agency'], 'procurement_method': r.get('procurement_method', ''),
                 'start_date': r['start_date'], 'end_date': r['end_date'],
                 'award_amount': float(r['award_amount'] or 0),
-                'classification': digital_vendors.get(r['vendor_name'], {}).get('classification', 'Digital')
+                # Which composition segment this row is in — resolved through the
+                # same module as the bar, so a row can never show a segment the bar
+                # would have counted elsewhere.
+                'segment': techsegments.segment_of(r.get('is_license'),
+                                                   r.get('function_category')),
+                'is_license': bool(r.get('is_license')),
             })
         return {"contracts": contracts_out, "total": total, "page": contract_page,
-                "total_pages": (total + contract_limit - 1) // contract_limit if total > 0 else 0}
+                "total_pages": (total + contract_limit - 1) // contract_limit if total > 0 else 0,
+                # What the table is currently scoped to, so the page can show a
+                # clearable chip instead of silently displaying a subset.
+                "segment": seg_name, "segment_slug": techsegments.slug(seg_name) if seg_name else ""}
 
     async def _expiring():
-        """Renewal Review Queue: every digital contract expiring before 2030,
-        enriched with review flags + City Record links, filtered/sorted/paged.
+        """Renewal Review Queue: every digital contract expiring before the shared
+        horizon, enriched with review flags + City Record links, filtered/sorted/paged.
 
         The full set is small (≤~800 rows), so we pull it once and do flag
         computation, filtering, summary aggregation and pagination in Python —
         this keeps the transparent flags and the flag-based filter consistent
         with the summary counts, and needs only one row scan + two crol lookups.
+
+        ⚠ SCOPED BY `qsc`, NOT `sc`. This page is on the derived scope
+        (classification-confirmed technology, one row per contract) ahead of the
+        Overview rebuild; see modules/digitalscope.QUEUE_MODE_ENV.
         """
-        # 1. Full set: all digital contracts expiring between today and 2030-01-01.
+        # 1. Full set: all digital contracts expiring between today and the horizon.
+        # ⚠⚠ NO `LEFT JOIN vendors`. It used to resolve the supplier id here, and
+        # 48 vendor names hold more than one row in that table, so the join
+        # DUPLICATED a contract — CT1-017-20248805602 (Absorb Software LMS, two
+        # supplier ids) is why this page reported 243 expiring licences where the
+        # Licenses page reported 242. Ids now come from vendorids.unique_map below,
+        # which cannot duplicate a row and refuses to guess between two companies.
         base_q = f"""
             SELECT c.contract_id, c.ctr_id, c.epin, c.normalized_contract_id, c.contract_title,
                    c.vendor_name, c.agency, c.procurement_method, c.program, c.industry,
@@ -2697,17 +3227,20 @@ async def get_digital_reform_all(
                    CASE WHEN LENGTH(c.start_date) = 10
                         THEN (CURRENT_DATE - TO_DATE(c.start_date, 'MM/DD/YYYY')) END AS days_since_start,
                    substr(c.end_date, 7, 4) AS exp_year,
-                   substr(c.start_date, 7, 4) AS start_year,
-                   v."PASSPort Supplier-ID" as vendor_id
-            FROM contracts c
-            LEFT JOIN vendors v ON LOWER(c.vendor_name) = LOWER(v."Vendor Name")
-            WHERE c.vendor_name IN ({vendor_list})
-              AND c.end_date IS NOT NULL AND LENGTH(c.end_date) = 10
-              AND TO_DATE(c.end_date, 'MM/DD/YYYY') >= CURRENT_DATE
-              AND TO_DATE(c.end_date, 'MM/DD/YYYY') < DATE '2030-01-01'
-            ORDER BY TO_DATE(c.end_date, 'MM/DD/YYYY') ASC
+                   substr(c.start_date, 7, 4) AS start_year
+            FROM {qsc.table()} c
+            WHERE {qsc.where('c')}
+              AND {licensewindow.sql_clause('c')}
+            ORDER BY TO_DATE(c.end_date, 'MM/DD/YYYY') ASC, c.contract_id ASC
         """
+        # ⚠ `c.contract_id` is a TIEBREAK, not decoration. 693 contracts share ~500
+        # distinct end dates, so ordering on the date alone left tied rows in
+        # whatever order the plan produced — and removing the vendors join changed
+        # the plan, which is how a deep-diff of this payload turned up two rows
+        # simply swapped. On a paginated table an unstable order can show one row
+        # twice and hide another across two page loads.
         rows = await PostgresModelAsync.select_safe(base_q) or []
+        vendor_ids = await vendorids.unique_map(PostgresModelAsync, logger)
 
         # 2. Which of these PINs have a *live or forthcoming procurement* posted in
         #    the City Record (= a replacement is visibly in motion)? Only Solicitation
@@ -2726,36 +3259,58 @@ async def get_digital_reform_all(
                     [all_epins])
                 rebid_epins = {row['pin'] for row in (m or [])}
             except Exception as exc:  # noqa: BLE001
-                logger.warning(f"[oce] expiring re-bid lookup failed: {exc}")
+                # ALERTS: queue-wide signal: every row silently loses its no-open-solicitation flag.
+                logger.error(f"[oce] expiring re-bid lookup failed: {exc}")
 
         # 2b. Vendor footprint across ALL digital contracts (lock-in signal).
+        # ⚠ Measured over the QUEUE's universe. Both this and 2c genuinely weaken
+        # as the universe widens (lock-in 357 -> 301, renewal chain 391 -> 367):
+        # a vendor's concentration is a share of the technology the City buys, so a
+        # truer denominator means fewer vendors look concentrated. That is the
+        # flags becoming more honest, not fewer problems existing.
         vendor_stats = {}
         try:
             vrows = await PostgresModelAsync.select_safe(
-                f"""SELECT vendor_name, COUNT(*) AS cnt, COUNT(DISTINCT agency) AS agencies,
-                           COALESCE(SUM(award_amount),0) AS total
-                    FROM contracts WHERE vendor_name IN ({vendor_list})
-                    GROUP BY vendor_name""")
+                # ⚠ `total` drives a PUBLISHED claim about a named vendor — the
+                # lock-in flag reads "this vendor holds $189M total citywide" —
+                # so it must not silently include ceilings the vendor has never
+                # been paid against. Split here rather than at the flag, because
+                # the flag's THRESHOLD is what the split changes: a vendor whose
+                # book is mostly master ceilings should not trip a concentration
+                # test on money nobody has spent. `sql_is_master` is the same
+                # rule as `contractkind.is_master`, guard-pinned to agree.
+                f"""SELECT c.vendor_name, COUNT(*) AS cnt, COUNT(DISTINCT c.agency) AS agencies,
+                           COALESCE(SUM({qsc.value('c')}),0) AS total,
+                           COALESCE(SUM({qsc.value('c')}) FILTER (
+                               WHERE NOT ({contractkind.sql_is_master('c.contract_id')})),0)
+                             AS committed_total,
+                           COALESCE(SUM({qsc.value('c')}) FILTER (
+                               WHERE {contractkind.sql_is_master('c.contract_id')}),0)
+                             AS ceiling_total
+                    FROM {qsc.table()} c WHERE {qsc.where('c')}
+                    GROUP BY c.vendor_name""")
             vendor_stats = {r['vendor_name']: r for r in (vrows or [])}
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[oce] vendor concentration lookup failed: {exc}")
+            # ALERTS: queue-wide signal: every row silently loses its lock-in flag.
+            logger.error(f"[oce] vendor concentration lookup failed: {exc}")
 
         # 2c. Vendor+agency relationship (renewal-chain signal).
         va_stats = {}
         try:
             varows = await PostgresModelAsync.select_safe(
-                f"""SELECT vendor_name, agency, COUNT(*) AS cnt,
-                           MIN(substr(start_date, 7, 4)) AS since,
-                           COALESCE(SUM(award_amount),0) AS total
-                    FROM contracts WHERE vendor_name IN ({vendor_list})
-                      AND agency IS NOT NULL AND agency <> ''
-                    GROUP BY vendor_name, agency""")
+                f"""SELECT c.vendor_name, c.agency, COUNT(*) AS cnt,
+                           MIN(substr(c.start_date, 7, 4)) AS since,
+                           COALESCE(SUM({qsc.value('c')}),0) AS total
+                    FROM {qsc.table()} c WHERE {qsc.where('c')}
+                      AND c.agency IS NOT NULL AND c.agency <> ''
+                    GROUP BY c.vendor_name, c.agency""")
             va_stats = {(r['vendor_name'], r['agency']): r for r in (varows or [])}
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[oce] vendor+agency lookup failed: {exc}")
+            # ALERTS: queue-wide signal: every row silently loses its renewal-chain flag.
+            logger.error(f"[oce] vendor+agency lookup failed: {exc}")
 
         # 2d. Checkbook spend per contract (cached daily; best-effort).
-        spend_map = await _get_digital_spend_map(vendor_list)
+        spend_map = await _get_digital_spend_map(sc, qsc)
 
         # 2e. AI enrichment (build-vs-buy, license, function category, tech flag).
         enr_map = {}
@@ -2768,7 +3323,45 @@ async def get_digital_reform_all(
                        FROM digital_contract_enrichment WHERE contract_id = ANY($1)""", [cids])
                 enr_map = {e['contract_id']: e for e in (erows or [])}
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[oce] enrichment lookup failed (table missing?): {exc}")
+            # ALERTS: EVERY AI flag on the page. Sentry runs only where that table exists, so firing here means broken, not fresh.
+            logger.error(f"[oce] enrichment lookup failed (table missing?): {exc}")
+
+        # 2f. Product -> family (+ slug, + is_generic), for the Licenses page's deep
+        # links. ⚠ SEPARATELY guarded on purpose. Folding this join into the query
+        # above would mean a missing license_family table takes the whole `try` with
+        # it and silently disables EVERY AI flag on this page -- a much larger
+        # failure than losing one filter. Absent table => family falls back to
+        # the raw product, and the page is merely ungrouped and unlinked.
+        # ⚠ The SLUG is what makes a licence row link to its family page. Linking by
+        # display name would break the moment a curated merge renamed a family;
+        # licenses.py resolves /family/{slug} by slug for exactly that reason.
+        family_map = {}
+        try:
+            frows = await PostgresModelAsync.select_safe(
+                "SELECT product_raw, family, slug, is_generic FROM license_family")
+            family_map = {f['product_raw']: f for f in (frows or [])}
+        except Exception as exc:  # noqa: BLE001
+            logger.info(f"[oce] license_family unavailable, using raw products: {exc_str(exc)}")
+
+        # 2g. Purchase class, resolved through modules/licenseclass at PRODUCT grain
+        # with a FAMILY fallback -- the SAME resolver the Licenses page uses, so the
+        # two pages cannot disagree about what kind of purchase a contract is.
+        # ⚠ Separately guarded, same reasoning as 2f: absent tables mean no class,
+        # which restores the pre-gate behaviour (every row asked the build-your-own
+        # question) rather than emptying the queue.
+        fam_classes, prod_classes = {}, {}
+        try:
+            crows = await PostgresModelAsync.select_safe(
+                "SELECT family, class, lever, why, tier FROM license_family_class")
+            fam_classes = {c['family']: dict(c) for c in (crows or [])}
+        except Exception as exc:  # noqa: BLE001
+            logger.info(f"[oce] license_family_class unavailable: {exc_str(exc)}")
+        try:
+            prows = await PostgresModelAsync.select_safe(
+                "SELECT product_norm, class, lever, why, tier FROM license_product_class")
+            prod_classes = {p['product_norm']: dict(p) for p in (prows or [])}
+        except Exception as exc:  # noqa: BLE001
+            logger.info(f"[oce] license_product_class unavailable: {exc_str(exc)}")
 
         # 3. Enrich each row with flags + tidy fields.
         enriched = []
@@ -2783,12 +3376,23 @@ async def get_digital_reform_all(
             spent = spend_map.get(ncid) if ncid else None
             award_amt = float(r.get('award_amount') or 0)
             enr = enr_map.get(r['contract_id']) or {}
+            product = enr.get('license_product') or ''
+            fam_row = family_map.get(product) or {}
+            family = fam_row.get('family') or product
+            # ⚠ Resolved for EVERY row, licence or not: a non-licence contract has
+            # no family, so resolve() returns an empty class and the row keeps the
+            # unclassified behaviour. That is the intended asymmetry — the gate
+            # exists to stop asking "could we build this?" of hosting and support,
+            # not to stop asking it of a website-development service.
+            pclass = licenseclass.resolve(product, family, prod_classes, fam_classes)
             flags = _review_flags(r, days, has_rebid, vendor_stats.get(r['vendor_name']),
-                                   va_stats.get((r['vendor_name'], r.get('agency'))), spent, dss, enr)
+                                   va_stats.get((r['vendor_name'], r.get('agency'))), spent, dss, enr,
+                                   pclass)
             enriched.append({
                 'contract_id': r['contract_id'], 'ctr_id': r.get('ctr_id'), 'epin': epin,
                 'contract_title': _ascii(r.get('contract_title', '')),
-                'vendor_id': r.get('vendor_id'), 'vendor_name': r['vendor_name'],
+                'vendor_id': vendor_ids.get(vendorids.key(r.get('vendor_name'))),
+                'vendor_name': r['vendor_name'],
                 'agency': r.get('agency', ''), 'procurement_method': r.get('procurement_method', ''),
                 'program': r.get('program', ''), 'industry': r.get('industry', ''),
                 'start_date': r.get('start_date'), 'end_date': r.get('end_date'),
@@ -2800,13 +3404,39 @@ async def get_digital_reform_all(
                 'has_rebid': has_rebid,
                 'tech_relevant': enr.get('tech_relevant'),
                 'is_license': enr.get('is_license'),
-                'license_product': _ascii(enr.get('license_product') or ''),
+                'license_product': _ascii(product),
+                'license_family': _ascii(family),
+                # ⚠ Empty for a generic family ("Various", "Unknown"): those are not
+                # products, so their family page would tell a reader nothing and the
+                # Licenses page itself refuses to rank them. No slug => no link.
+                'license_family_slug': ('' if fam_row.get('is_generic')
+                                        else (fam_row.get('slug') or '')),
                 'license_purpose': _ascii(enr.get('license_purpose') or ''),
                 'function_category': _ascii(enr.get('function_category') or ''),
                 'build_vs_buy': enr.get('build_vs_buy') or '',
                 'ai_rationale': _ascii(enr.get('rationale') or ''),
+                # The purchase class, so the page can show which question this
+                # contract deserves instead of assuming it is the substitution one.
+                'purchase_class': pclass.get('class') or '',
+                'purchase_class_lever': pclass.get('lever') or '',
+                'purchase_class_source': pclass.get('source') or '',
+                'purchase_class_tier': pclass.get('tier') or '',
                 'flags': flags, 'flag_keys': [f['key'] for f in flags],
-                'classification': digital_vendors.get(r['vendor_name'], {}).get('classification', 'Digital'),
+                # ⚠ Whether this row's money is COMMITTED or a CEILING to buy
+                # against. A master agreement carries no payments under its own
+                # id — measured 0 of 57 on this queue, against 88% of ordinary
+                # contracts — so a $50.0M master rendered like a $50.0M contract
+                # reads as spend about to renew. Served per row so the page can
+                # label it rather than re-deriving the rule in Blade.
+                'amount_kind': 'ceiling' if contractkind.is_master(
+                    r['contract_id']) else 'committed',
+                'contract_kind': contractkind.kind(r['contract_id']),
+                # ⚠ `classification` REMOVED (#247). It came from vendor_tags, which the
+                # derived scope does not read — so after the flip it returned the
+                # constant 'Digital' for every row: a key that looks like data and says
+                # nothing. Nothing rendered it (checked across the views, the public API
+                # and the MCP server), and a payload deep-diff against prod showed these
+                # 17 rows as the ONLY difference in the queue, which is how it surfaced.
             })
 
         # 4. Filter options derived from the full set (so the dropdowns are stable).
@@ -2818,8 +3448,19 @@ async def get_digital_reform_all(
                                   if e['function_category'] and e['function_category'] != 'Non-tech'}),
         }
 
-        # Likely-non-tech contracts (AI tech_relevant=False) are excluded by default
-        # — the digital_services tag has false positives (pest control, drydock…).
+        # Likely-non-tech contracts (AI tech_relevant=False) are excluded by default.
+        # ⚠⚠ THIS IS A TAG-SCOPE DEVICE AND IT IS RETIRED ON THE DERIVED SCOPE.
+        # Under the vendor-name tag, "digital" admitted pest control and ship repair,
+        # so the page had to hide 105 confirmed non-tech contracts and disclose that
+        # it was hiding them. The derived scope is a POSITIVE condition — a contract
+        # is here because the classification confirmed it is technology — so nothing
+        # can be admitted and then hidden, and `nontech_excluded` is 0 by
+        # construction. Kept computed rather than deleted so the number stays
+        # MEASURED: if it is ever non-zero on the derived scope, that is a defect in
+        # the scope, not a filter to re-expose.
+        # ⚠ `expiring_shownontech` is therefore inert on the derived scope. The UI
+        # control is gone; the parameter is still accepted so an old bookmark or the
+        # Overview's forwarded query string cannot 422.
         nontech_total = sum(1 for e in enriched if e['tech_relevant'] is False)
         show_nontech = expiring_shownontech in ('1', 'true', 'yes')
 
@@ -2834,14 +3475,34 @@ async def get_digital_reform_all(
             if expiring_category and e['function_category'] != expiring_category: return False
             if expiring_buildbuy and e['build_vs_buy'] != expiring_buildbuy: return False
             if expiring_license in ('1', 'true', 'yes') and not e['is_license']: return False
+            # Matches a FAMILY or a raw product name, so a Licenses-page link
+            # works whether or not the family mapping table is present.
+            if expiring_product and expiring_product not in (
+                    e['license_family'], e['license_product']): return False
             return True
         filtered = [e for e in enriched if _keep(e)]
 
         # 6. Summary over the filtered set (drives the headline strip).
+        # ⚠⚠ COMMITTED MONEY AND CEILINGS ARE NOT THE SAME NUMBER, so the summary
+        # reports both and never only their sum. 57 of these rows are master
+        # agreements carrying $1,623.9M of ceiling that no agency has drawn
+        # against — 0% of masters have a payment under their own id, against 88%
+        # of ordinary contracts. See modules/contractkind. `total_value` is kept
+        # (it is what the existing tile renders and consumers read) but is now
+        # accompanied by the split, so a page can stop captioning it as spend.
+        _committed, _ceiling, _n_committed, _n_ceiling = contractkind.split_amounts(
+            filtered, amount=lambda e: e['award_amount'])
         summary = {
             'count': len(filtered),
             'total_value': sum(e['award_amount'] for e in filtered),
+            'committed_value': _committed,
+            'ceiling_value': _ceiling,
+            'committed_count': _n_committed,
+            'ceiling_count': _n_ceiling,
             'build_your_own': sum(1 for e in filtered if 'build_your_own' in e['flag_keys']),
+            # Rows where the substitution question was withdrawn because the
+            # purchase class implies a different lever. See CLASS_LEVER_LABELS.
+            'class_lever': sum(1 for e in filtered if 'class_lever' in e['flag_keys']),
             'non_competitive': sum(1 for e in filtered if 'non_competitive' in e['flag_keys']),
             'no_rebid': sum(1 for e in filtered if 'no_rebid' in e['flag_keys']),
             'scope_growth': sum(1 for e in filtered if 'scope_growth' in e['flag_keys']),
@@ -2850,6 +3511,13 @@ async def get_digital_reform_all(
             'underused': sum(1 for e in filtered if 'underused' in e['flag_keys']),
             'renewal_chain': sum(1 for e in filtered if 'renewal_chain' in e['flag_keys']),
             'licenses': sum(1 for e in filtered if e['is_license']),
+            # ⚠ current-else-award, the LICENCES-PAGE money rule, so the two pages'
+            # expiring-licence value is comparable figure-for-figure. `total_value`
+            # above stays award_amount because the tile beside it says "Total
+            # awarded"; mixing the two rules under one label is how a page ends up
+            # with two numbers for one thing.
+            'licenses_value': sum((e['current_amount'] or e['award_amount'])
+                                  for e in filtered if e['is_license']),
             'nontech_excluded': 0 if show_nontech else nontech_total,
         }
 
@@ -2894,27 +3562,79 @@ async def get_digital_reform_all(
 
         return {"contracts": page_rows, "total": total, "page": expiring_page,
                 "total_pages": (total + expiring_limit - 1) // expiring_limit if total > 0 else 0,
-                "summary": summary, "options": options}
+                "summary": summary, "options": options,
+                # ⚠ The page states which scope it is on, from the payload, never
+                # from copy. While the Overview and the queue run in different
+                # scopes, a reader comparing two pages must be able to see that.
+                "scope": {"mode": qsc.mode,
+                          "positive": qsc.mode == "derived",
+                          "horizon": licensewindow.HORIZON,
+                          "one_row_per_contract": qsc.mode == "derived"}}
+
+    async def _pipeline():
+        """Citywide vehicles that have not reached registration — the section-level
+        blind spot, and this page is its canonical home (the Licenses page points
+        here rather than computing a second, narrower figure).
+
+        ⚠ Scoped by the DERIVED tech vendor set, computed in SQL from the same
+        predicate the page displays — never from the old vendor-name tag, which
+        admits janitorial services and ship repair onto a technology page.
+        ⚠ The literal table name is deliberately not written here: the ban guard in
+        test_digitalscope.py strips `#` comments but cannot strip docstrings, because
+        triple-quoted strings are also where SQL lives. Wording around it keeps the
+        guard maximally strict, which is the right trade.
+        ⚠ Tag mode returns the block empty rather than a tag-scoped version: the
+        whole point of the move is one figure for the section.
+        """
+        if sc.mode != "derived":
+            return {"rows": [], "count": 0, "ceiling": 0.0, "masters": 0,
+                    "floor": pipelinevehicles.DISPLAY_FLOOR, "vendors": 0,
+                    "unavailable_reason": f"scope is '{sc.mode}'"}
+        try:
+            vrows = await PostgresModelAsync.select_safe(
+                f"""SELECT DISTINCT c.vendor_name FROM {sc.table()} c
+                    WHERE {sc.where('c')} AND coalesce(c.vendor_name, '') <> ''""") or []
+        except Exception as exc:  # noqa: BLE001
+            # ALERTS: the whole pipeline block returns an empty shell that reads as "no vehicles".
+            logger.error(f"[oce] pipeline vendor set unavailable: {exc_str(exc)}")
+            return {"rows": [], "count": 0, "ceiling": 0.0, "masters": 0,
+                    "floor": pipelinevehicles.DISPLAY_FLOOR, "vendors": 0}
+        return await pipelinevehicles.load(
+            PostgresModelAsync, [r["vendor_name"] for r in vrows], logger)
 
     async def _contract_options():
         """Distinct procurement methods across all digital contracts — feeds the
         contracts-table method filter dropdown."""
         rows = await PostgresModelAsync.select_safe(
-            f"""SELECT DISTINCT procurement_method AS m FROM contracts
-                WHERE vendor_name IN ({vendor_list})
-                  AND procurement_method IS NOT NULL AND procurement_method <> ''
+            f"""SELECT DISTINCT c.procurement_method AS m FROM {sc.table()} c
+                WHERE {sc.where('c')}
+                  AND c.procurement_method IS NOT NULL AND c.procurement_method <> ''
                 ORDER BY 1""")
         return {"methods": [r['m'] for r in (rows or [])]}
 
     # Run all query groups concurrently
-    stats, charts, vendors, contracts, expiring_data, contract_options = await asyncio.gather(
-        _stats(), _charts(), _vendors(), _contracts(), _expiring(), _contract_options()
+    # ⚠ Composition runs FIRST, not in the gather: _contracts resolves its segment
+    # filter against the segments this computes, so the bar and its drill-down are
+    # provably the same partition. One query over ~4,400 rows.
+    composition = await _composition()
+    composition_segments = composition.get("segments") or []
+
+    stats, charts, vendors, contracts, expiring_data, contract_options, pipeline = await asyncio.gather(
+        _stats(), _charts(), _vendors(), _contracts(), _expiring(), _contract_options(), _pipeline()
     )
 
     result = {
         "stats": stats, "charts": charts, "vendors": vendors,
         "contracts": contracts, "expiring": expiring_data,
         "contract_options": contract_options,
+        "composition": composition,
+        # ⚠⚠ NEVER MERGED INTO A TOTAL — `ceiling`, not `value`. See
+        # modules/pipelinevehicles. A test pins the separation on both pages.
+        "pipeline": pipeline,
+        # What "digital" means for this payload, so the page states its scope from
+        # the data rather than from copy.
+        "scope": {"mode": sc.mode, "positive": sc.mode == "derived",
+                  "vendor_count": sc.vendor_count},
     }
 
     # Cache result
@@ -3240,21 +3960,59 @@ async def get_agency_procurement(name: str = Query(..., description="Agency name
     """
     solicitations = await PostgresModelAsync.select_safe(solicitations_list_query, [agency_name])
     
-    # All vendors for table (client-side pagination) - join to get vendor IDs
+    # All vendors for table (client-side pagination).
+    # ⚠⚠ NO `LEFT JOIN vendors`, AND THIS IS WHY. Resolving the supplier id here
+    # with `ON LOWER(TRIM(c.vendor_name)) = LOWER(TRIM(v."Vendor Name"))` and then
+    # grouping by that id LISTED A VENDOR TWICE, because 48 vendor names hold more
+    # than one row in `vendors` — PASSPort duplicate-registrations, 42 of them with
+    # a distinct FMS vendor code per record (ABSORB SOFTWARE INC is 1871820 /
+    # FNR0000088 and 2073456 / FNR0000453, identical in every other field).
+    #
+    # Measured on prod 2026-08-12, before this fix: 20 duplicated rows across 12
+    # agencies — Department for the Aging listed ALLEN AME CHURCH twice at
+    # $16,126,468 each, and 2 more besides. The two copies each linked to a
+    # DIFFERENT vendor profile for the same company.
+    #
+    # ⚠ The sharpest symptom was a page disagreeing with itself: `stats.vendors` is
+    # COUNT(DISTINCT vendor_name) and was right, while the Vendors tab badge counts
+    # these rows and read 1-3 higher on those 12 agencies. Two vendor counts on one
+    # page, and no way for a reader to tell which was the measurement.
+    #
+    # ⚠ NOT a money error: the join multiplies rows evenly, so each duplicate
+    # carried the CORRECT contract count and total. Nothing was overstated — one
+    # relationship was simply presented as two.
+    #
+    # Ids now come from modules/vendorids.unique_map, which accepts a name only
+    # where it resolves to exactly ONE supplier id. A map cannot duplicate a row,
+    # and an ambiguous name stays unlinked rather than sending a reader to an
+    # arbitrary one of two companies. The table's JS already renders an unlinked
+    # name when `vendor_id` is absent, so no template change is needed.
     vendors_list_query = """
-        SELECT 
+        SELECT
             c.vendor_name as name,
-            v."PASSPort Supplier-ID" as vendor_id,
             COUNT(*) as contract_count,
             COALESCE(SUM(c.award_amount), 0) as total_value
         FROM contracts c
-        LEFT JOIN vendors v ON LOWER(TRIM(c.vendor_name)) = LOWER(TRIM(v."Vendor Name"))
         WHERE LOWER(TRIM(c.agency)) = LOWER(TRIM($1))
         AND c.vendor_name IS NOT NULL AND c.vendor_name != ''
-        GROUP BY c.vendor_name, v."PASSPort Supplier-ID"
-        ORDER BY total_value DESC
+        GROUP BY c.vendor_name
+        ORDER BY total_value DESC, c.vendor_name ASC
     """
-    vendors = await PostgresModelAsync.select_safe(vendors_list_query, [agency_name])
+    # ⚠ `c.vendor_name` is a TIEBREAK, and the ties here are large: at DYCD 115
+    # vendors share a total of $18,750, 69 share $0 and 66 share $5,000, in a
+    # client-paginated 2,010-row table. Ordering on the value alone leaves those
+    # groups in whatever order the plan produces, which can show one vendor twice
+    # across two page loads and never show another.
+    # ⚠ Stated precisely, because I could not reproduce it: two runs returned an
+    # IDENTICAL order, so today it is incidentally repeatable, not guaranteed. What
+    # is measured is that the order is unspecified by the query and that changing the
+    # query reorders tied rows — the Renewal Queue's tied end_date rows did exactly
+    # that when this same join was removed there. The tiebreak is free; relying on
+    # the planner is not.
+    vendor_rows = await PostgresModelAsync.select_safe(vendors_list_query, [agency_name])
+    agency_vendor_ids = await vendorids.unique_map(PostgresModelAsync, logger)
+    vendors = [{**dict(r), "vendor_id": agency_vendor_ids.get(vendorids.key(r["name"]))}
+               for r in (vendor_rows or [])]
     
     # Resolve the org profile this agency maps to (if any) so callers can deep-link
     # / redirect into the unified org profile instead of the standalone page.
