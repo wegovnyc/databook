@@ -10,8 +10,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for MCP server
+#
+# ⚠⚠ `mcp` IS PINNED BELOW 2.0 AND MUST STAY THAT WAY. It was unpinned, `mcp`
+# released 2.0.0, and the next full rebuild installed it — 2.x REMOVED
+# `mcp.server.fastmcp`, which mcp_server.py imports twice (FastMCP and
+# TransportSecuritySettings). The container then crash-looped **961 times** from
+# 2026-08-18T00:53 and `api.databook.nyc/mcp` served **502 for ~16.5 hours**.
+# Nothing alerted: the container restarts, so it is "up" to compose, and the
+# `MCP Tool Audit (prod)` CI job that exists to catch precisely this is gated on
+# `workflow_dispatch` and had never run on its own.
+#
+# 1.29.0 verified to provide both imports before pinning (throwaway container,
+# not assumed). The upper bound is the point; the lower bound just records what
+# was tested.
+#
+# ⚠ THE OTHER FIVE ARE STILL UNPINNED and carry the same latent failure — any of
+# them can ship a breaking major and this image rebuilds from PyPI every time.
+# Left alone deliberately: the current image is BROKEN, so its installed versions
+# are not a known-good set to freeze. Pinning them needs a green build to pin
+# FROM, which this change produces.
 RUN pip install --no-cache-dir \
-    mcp \
+    'mcp>=1.29,<2' \
     asyncpg \
     starlette \
     uvicorn \

@@ -20,6 +20,7 @@ from extractors import (
     S3_BUCKET, S3_PREFIX, clean_text,
     get_current_fiscal_year, upload_to_s3,
 )
+from modules.errfmt import exc_str
 
 # Checkbook NYC XML API
 API_URL = "https://www.checkbooknyc.com/api"
@@ -133,7 +134,7 @@ def download_contracts(year: str = None, dry_run: bool = False) -> tuple[str | N
                     time.sleep(1)
 
                 except Exception as e:
-                    print(f"[contracts] Error: {e}")
+                    print(f"[contracts] Error: {exc_str(e)}")
                     break
 
     print(f"[contracts] Download complete: {total_records} records")

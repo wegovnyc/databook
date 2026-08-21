@@ -49,31 +49,57 @@
 })();
 </script>
 
-<div class="inner_container">
+{{-- ⚠ `db-home` EXISTS TO SCOPE THE BAND. The approved treatment was demonstrated
+     against `.inner_container`, which is used by 93 views — styling it would have
+     repainted every page on the site under a "landing only" heading. Everything in
+     the style block below is namespaced to this class or to briefing-only
+     selectors that appear in no other view. --}}
+<div class="inner_container db-home">
 	<!-- Morning Briefing Dashboard -->
 	<style>
+		/* ── The approved treatment (Devin, 2026-08-13): the briefing sits on a
+		   faint navy band and its time windows become cards floating on it, which
+		   is what the styleguide and the sibling properties already look like.
+		   ⚠ Every colour below is a token. The block used to carry Bootstrap and
+		   Tailwind-family literals (var(--db-text-muted), var(--db-navy-050), var(--db-navy-100), var(--db-gray-400), var(--db-accent))
+		   that belong to no palette this site owns. ── */
+		.db-home { background: var(--db-navy-050); padding-bottom: var(--db-space-3); }
 		.briefing-header {
 			display: flex; align-items: center; justify-content: space-between;
-			padding: 12px 0 8px; border-bottom: 2px solid #162E51;
+			padding: 12px 0 8px; border-bottom: 2px solid var(--db-primary);
 		}
-		.briefing-header h2 { margin: 0; font-weight: 800; color: #162E51; font-size: 22px; }
-		.briefing-header .briefing-date { color: #6c757d; font-size: 14px; font-weight: 500; }
+		.briefing-header h2 { margin: 0; font-weight: 800; color: var(--db-primary); font-size: 22px; }
+		/* The date chip: a navy pill instead of flat Bootstrap-gray text.
+		   ⚠⚠ THE HANDOFF'S VERSION OF THIS RULE COULD NOT WORK AS DESCRIBED. It read
+		   `.briefing-date { … }` plus `.ticker-today .briefing-date { … }` and called
+		   them "date chips" on the ticker — but `.briefing-date` exists exactly ONCE
+		   on this page, on the header span at line ~224. Ticker rows render their
+		   date as `.ticker-badge`, which already carries the per-section categorical
+		   hue. So the first rule only ever restyled the header (which is what the
+		   live A/B showed), and the second matched nothing at all. Applied here to
+		   the element that exists; the "today" emphasis stays on the row, where it
+		   has a target. */
+		.briefing-header .briefing-date {
+			background: var(--db-navy-100); color: var(--db-navy-600);
+			border-radius: var(--db-radius); padding: 1px 8px;
+			font-size: 12.5px; font-weight: 600; border: 0;
+		}
 		.briefing-tabs {
-			display: flex; gap: 4px; padding: 8px 0; border-bottom: 1px solid #e9ecef;
+			display: flex; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--db-gray-200);
 		}
 		.briefing-tab {
-			padding: 4px 12px; font-size: 12px; font-weight: 600; border: 1px solid #dee2e6;
-			border-radius: 14px; cursor: pointer; background: #fff; color: #495057;
+			padding: 4px 12px; font-size: 12px; font-weight: 600; border: 1px solid var(--db-gray-300);
+			border-radius: 14px; cursor: pointer; background: var(--db-white); color: var(--db-gray-700);
 			transition: all 0.15s; white-space: nowrap;
 		}
-		.briefing-tab:hover { background: #f0f7ff; border-color: #4299e1; }
-		.briefing-tab.active { background: #162E51; color: #fff; border-color: #162E51; }
+		.briefing-tab:hover { background: var(--db-navy-050); border-color: var(--db-accent); }
+		.briefing-tab.active { background: var(--db-primary); color: var(--db-white); border-color: var(--db-primary); }
 		.briefing-tab .tab-count {
 			display: inline-block; background: rgba(255,255,255,0.2); padding: 0 5px;
 			border-radius: 8px; font-size: 10px; margin-left: 4px;
 		}
 		.briefing-tab.active .tab-count { background: rgba(255,255,255,0.3); }
-		.briefing-tab:not(.active) .tab-count { background: #e9ecef; }
+		.briefing-tab:not(.active) .tab-count { background: var(--db-gray-200); }
 		.briefing-panels { margin-top: 8px; }
 		.briefing-cards {
 			display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
@@ -87,8 +113,8 @@
 		.ticker-section { margin-bottom: 6px; break-inside: avoid; }
 		.ticker-section-header {
 			font-size: 11px; font-weight: 700; text-transform: uppercase;
-			letter-spacing: 0.8px; padding: 4px 0; color: #162E51;
-			border-bottom: 1px solid #e9ecef; margin-bottom: 2px;
+			letter-spacing: 0.8px; padding: 4px 0; color: var(--db-primary);
+			border-bottom: 1px solid var(--db-gray-200); margin-bottom: 2px;
 			display: flex; align-items: center; gap: 6px;
 		}
 		.ticker-section-header .sec-dot {
@@ -96,39 +122,41 @@
 		}
 		.ticker-row {
 			display: flex; align-items: baseline; padding: 3px 0; font-size: 13px;
-			border-bottom: 1px solid #f8f9fa; cursor: pointer; transition: background 0.1s;
+			border-bottom: 1px solid var(--db-gray-100); cursor: pointer; transition: background 0.1s;
 			gap: 8px;
 		}
-		.ticker-row:hover { background: #f0f7ff; }
+		.ticker-row:hover { background: var(--db-navy-050); }
 		.ticker-badge {
 			font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px;
 			white-space: nowrap; flex-shrink: 0;
 		}
-		.ticker-title { flex: 1; color: #212529; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-		.ticker-agency { color: #6c757d; font-size: 11px; flex-shrink: 0; white-space: nowrap; }
-		.ticker-time { color: #adb5bd; font-size: 11px; flex-shrink: 0; white-space: nowrap; }
+		.ticker-title { flex: 1; color: var(--db-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+		.ticker-agency { color: var(--db-text-muted); font-size: 11px; flex-shrink: 0; white-space: nowrap; }
+		.ticker-time { color: var(--db-gray-500); font-size: 11px; flex-shrink: 0; white-space: nowrap; }
 		/* Card items */
 		.briefing-card {
-			border: 1px solid #e9ecef; border-radius: 6px; padding: 10px 12px;
+			border: 1px solid var(--db-gray-200); border-radius: 6px; padding: 10px 12px;
 			transition: border-color 0.15s, box-shadow 0.15s;
 			cursor: pointer; display: flex; flex-direction: column;
 		}
-		.briefing-card:hover { border-color: #4299e1; box-shadow: 0 1px 4px rgba(66,153,225,0.12); }
+		.briefing-card:hover { border-color: var(--db-accent); box-shadow: var(--db-shadow-md); }
 		.briefing-card .card-top {
 			display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
 		}
 		.briefing-card .card-title {
-			font-size: 13px; font-weight: 600; color: #212529; margin: 0;
+			font-size: 13px; font-weight: 600; color: var(--db-text); margin: 0;
 			line-height: 1.3;
 		}
 		.briefing-card .card-context {
-			font-size: 12px; color: #6c757d; margin: 2px 0 0; line-height: 1.3;
+			font-size: 12px; color: var(--db-text-muted); margin: 2px 0 0; line-height: 1.3;
 		}
 		.briefing-card .card-meta {
 			display: flex; justify-content: space-between; align-items: center;
-			margin-top: 4px; font-size: 11px; color: #adb5bd;
+			margin-top: 4px; font-size: 11px; color: var(--db-gray-500);
 		}
-		/* Badge colors by section */
+		/* ⚠ CATEGORICAL, NOT DRIFT. One hue per briefing section — the same job
+		   DBChart.palette does for charts. Mapping these onto brand tokens would
+		   delete the distinction they carry, so they stay as published. */
 		.badge-hearing { background: #dbeafe; color: #1e40af; }
 		.badge-rules { background: #ede9fe; color: #6b21a8; }
 		.badge-contracts { background: #ffedd5; color: #c2410c; }
@@ -141,28 +169,33 @@
 		/* Scrollbar */
 		.briefing-ticker::-webkit-scrollbar, .briefing-cards::-webkit-scrollbar { width: 4px; }
 		.briefing-ticker::-webkit-scrollbar-thumb, .briefing-cards::-webkit-scrollbar-thumb {
-			background: #cbd5e1; border-radius: 2px;
+			background: var(--db-gray-400); border-radius: 2px;
 		}
 		/* Responsive */
 		@media (max-width: 768px) {
 			.briefing-cards { grid-template-columns: 1fr; }
 			.briefing-ticker { columns: 1; max-height: 300px; }
 		}
-		/* Time window headers */
-		.time-window { margin-bottom: 16px; }
+		/* Time window headers — cards on the band */
+		.time-window {
+			background: var(--db-white); border: 1px solid var(--db-navy-100);
+			border-radius: var(--db-radius); box-shadow: var(--db-shadow-sm);
+			margin: var(--db-space-15) 0; overflow: hidden;
+		}
 		.time-window-header {
 			display: flex; align-items: center; justify-content: space-between;
-			padding: 6px 10px; background: #f1f5f9; border-radius: 4px;
-			margin-bottom: 6px;
+			padding: 10px 14px; background: var(--db-navy-050);
+			border-bottom: 1px solid var(--db-navy-100);
 		}
-		.time-window-label { font-size: 14px; font-weight: 700; color: #162E51; }
-		.time-window-count { font-size: 12px; color: #6c757d; font-weight: 500; }
+		.time-window-label { font-size: 14px; font-weight: 600; color: var(--db-primary); }
+		.time-window-count { font-size: 12px; color: var(--db-text-muted); font-weight: 500; }
+		/* The window's own content needs the padding the header used to imply. */
+		.time-window-body, .time-window > .briefing-ticker { padding: 0 14px 10px; }
 		/* Collapsible extended windows */
 		.time-window-header.collapsible {
-			cursor: pointer; background: #e2e8f0;
-			transition: background 0.15s;
+			cursor: pointer; transition: background 0.15s;
 		}
-		.time-window-header.collapsible:hover { background: #cbd5e1; }
+		.time-window-header.collapsible:hover { background: var(--db-navy-100); }
 		.time-window-header.collapsible .toggle-icon { display: inline-block; transition: transform 0.2s; }
 		.time-window-header.collapsible.open .toggle-icon { transform: rotate(90deg); }
 		.time-window-body { display: none; }
@@ -173,17 +206,17 @@
 		}
 		.briefing-toggle .toggle-btn {
 			padding: 5px 14px; font-size: 12px; font-weight: 600;
-			border: 1px solid #cbd5e1; border-radius: 6px;
-			background: #fff; color: #64748b; cursor: pointer;
+			border: 1px solid var(--db-gray-400); border-radius: 6px;
+			background: var(--db-white); color: var(--db-text-muted); cursor: pointer;
 			transition: all 0.15s;
 		}
-		.briefing-toggle .toggle-btn:hover { background: #f1f5f9; }
+		.briefing-toggle .toggle-btn:hover { background: var(--db-navy-050); }
 		.briefing-toggle .toggle-btn.active {
-			background: #162E51; color: #fff; border-color: #162E51;
+			background: var(--db-primary); color: var(--db-white); border-color: var(--db-primary);
 		}
 		/* Today highlight */
 		.ticker-row.ticker-today {
-			background: #eff6ff; border-left: 3px solid #3b82f6;
+			background: var(--db-navy-050); border-left: 3px solid var(--db-accent);
 		}
 	</style>
 
@@ -246,15 +279,15 @@
 					<p class="text-muted small mb-2">City Record agency news</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Today</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Today</div>
 							<strong id="notices_all_1" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">7 Days</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">7 Days</div>
 							<strong id="notices_all_7" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">30 Days</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">30 Days</div>
 							<strong id="notices_all_30" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>
@@ -271,15 +304,15 @@
 					<p class="text-muted small mb-2">City agencies & groups</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Agencies</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Agencies</div>
 							<strong id="agencies_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">All Orgs</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">All Orgs</div>
 							<strong id="orgs_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Sources</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Sources</div>
 							<strong id="orgs_datasets_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>
@@ -296,15 +329,15 @@
 					<p class="text-muted small mb-2">NYC government profiles</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Salaries</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Salaries</div>
 							<strong id="salary" class="prj_stat gs_finshort">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Employees</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Employees</div>
 							<strong id="employees_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Contacts</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Contacts</div>
 							<strong id="contacts_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>
@@ -321,15 +354,15 @@
 					<p class="text-muted small mb-2">Civil service title profiles</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Titles</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Titles</div>
 							<strong id="titles_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Positions</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Positions</div>
 							<strong id="positions_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Jobs</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Jobs</div>
 							<strong id="jobs_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>
@@ -346,15 +379,15 @@
 					<p class="text-muted small mb-2">Capital budget & commitments</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Projects</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Projects</div>
 							<strong id="projects_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Orig. Cost</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Orig. Cost</div>
 							<strong id="orig_cost" class="prj_stat gs_finshort" data-multiplier="1000">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Curr. Cost</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Curr. Cost</div>
 							<strong id="curr_cost" class="prj_stat gs_finshort" data-multiplier="1000">&nbsp;</strong>
 						</div>
 					</div>
@@ -371,15 +404,15 @@
 					<p class="text-muted small mb-2">K-12 school & building profiles</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Schools</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Schools</div>
 							<strong id="schools_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Students</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Students</div>
 							<strong id="students_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Projects</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Projects</div>
 							<strong id="prj_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>
@@ -396,15 +429,15 @@
 					<p class="text-muted small mb-2">Neighborhood & council data</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Community</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Community</div>
 							<strong id="dist_cd" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Council</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Council</div>
 							<strong id="dist_cc" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Hoods</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Hoods</div>
 							<strong id="dist_nta" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>
@@ -421,15 +454,15 @@
 					<p class="text-muted small mb-2">Contracts, vendors & bids</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Contracts</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Contracts</div>
 							<strong id="procurement_contracts" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Vendors</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Vendors</div>
 							<strong id="procurement_vendors" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: #6c757d; text-transform: uppercase;">Solicitations</div>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Solicitations</div>
 							<strong id="procurement_solicitations" class="prj_stat gs_thousandscomma">&nbsp;</strong>
 						</div>
 					</div>

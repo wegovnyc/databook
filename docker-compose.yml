@@ -1,5 +1,44 @@
 version: '3.8'
 
+# ── Container log rotation ───────────────────────────────────────────────────
+# ⚠ Docker's default json-file driver has NO rotation, so every container log
+# grows without bound. Measured on prod 2026-08-14: `databook-nginx` alone was
+# **2.0 GB** (container up ~2 months, ~33 MB/day of access log), against 2.0 GB
+# for all containers combined — i.e. essentially all of it.
+#
+# ⚠ The reason it had never caused an incident is luck, not policy: a container's
+# json log is truncated only when the container is RECREATED, never by
+# `docker compose restart`. So the counter resets on deploys that rebuild an
+# image and keeps climbing on every deploy that does not.
+#
+# Declared here rather than in /etc/docker/daemon.json deliberately. A daemon
+# default would cover every container on the box (including the map1 and nycdb
+# projects), but it lives only on the box, needs a dockerd restart, and this
+# repo has been bitten before by ops scripts editing the box's compose without
+# committing the result. A version-controlled block is reviewable, travels with
+# the repo, and takes effect on the next `up -d`. The box-wide daemon default is
+# a complementary decision, not a substitute — see task 86b6bd77.
+#
+# ⚠ These take effect only when a container is RECREATED. `up -d` does that
+# automatically because the logging config is part of the container spec, and
+# that recreate is also what reclaims the existing 2.0 GB.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"          # => 150 MB ceiling per container
+
+# nginx is deliberately given more headroom than the default: it is the highest
+# volume log on the box AND the one this repo actually reads for traffic
+# analysis (the crawler/ASN measurements in CLAUDE.md come from its access log).
+# At ~33 MB/day the default would retain barely four days. 100m x 5 keeps ~15
+# days while still bounding the file that caused this.
+x-logging-nginx: &nginx-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"          # => 500 MB ceiling
+
 services:
   app:
     build:
@@ -7,6 +46,7 @@ services:
       dockerfile: Dockerfile
     image: databook-laravel
     container_name: databook-app
+    logging: *default-logging
     restart: unless-stopped
     working_dir: /var/www
 
@@ -29,6 +69,7 @@ services:
       dockerfile: Dockerfile
     image: databook-api
     container_name: databook-api
+    logging: *default-logging
     restart: unless-stopped
     environment:
       POSTGRES_HOST: postgres
@@ -42,6 +83,13 @@ services:
       # cannot reach Cloudflare-proxied normalize.databook.nyc directly.
       NORMALIZER_BASE_URL: ${NORMALIZER_BASE_URL:-http://databook-nginx/normalizer}
       DATA_SCHEDULER_ENABLED: "1"
+      # Dead-man's switch for the scheduler loop (data_scheduler._hc_ping).
+      # ⚠ The api has no env_file, so a value in .env is only available for
+      # INTERPOLATION — it must be named here or the container never sees it.
+      # ⚠ `:-` and not `:?`: an unset value must leave the ping a NO-OP, never
+      # fail the container closed. Monitoring that can stop the service it
+      # monitors is worse than no monitoring.
+      HC_URL_API_SCHEDULER: ${HC_URL_API_SCHEDULER:-}
       # Spending/budget/revenue data lake. Default = AWS S3 (public-read, over
       # HTTPS). Set these (+ DATA_LAKE_PATH below) in the env/.env to serve the
       # Parquet off the mounted local /data volume instead — no AWS creds needed.
@@ -89,6 +137,7 @@ services:
       dockerfile: Dockerfile.mcp
     image: databook-mcp
     container_name: databook-mcp
+    logging: *default-logging
     restart: unless-stopped
     environment:
       POSTGRES_HOST: postgres
@@ -117,30 +166,35 @@ services:
     secrets:
       - postgres_mcp_password
 
-  newsletter:
-    build:
-      context: ./databook_newsletter/repo
-      dockerfile: Dockerfile
-    image: databook-newsletter
-    container_name: databook-newsletter
-    restart: unless-stopped
-    env_file:
-      - ./databook_newsletter/repo/.env
-    environment:
-      MCP_ENDPOINT: http://mcp:8082/mcp
-      BASE_PATH: /newsletter
-      TZ: America/New_York
-    volumes:
-      - ./databook_newsletter/repo/output:/app/output
-    depends_on:
-      mcp:
-        condition: service_healthy
-    networks:
-      - databook-network
-
+  # ⚠ NEWSLETTER RETIRED 2026-08-05. Stopped and commented out rather than
+  # deleted, because the owner may revisit it. It was serving UNAUTHENTICATED on
+  # api.databook.nyc/newsletter with live AWS + Gemini keys in its environment and
+  # POST /send reachable. Revive only behind auth, and rotate those keys first —
+  # they are committed in the databook-newsletter Dockerfile (task de2b9155).
+#  newsletter:
+#    build:
+#      context: ./databook_newsletter/repo
+#      dockerfile: Dockerfile
+#    image: databook-newsletter
+#    container_name: databook-newsletter
+#    restart: unless-stopped
+#    env_file:
+#      - ./databook_newsletter/repo/.env
+#    environment:
+#      MCP_ENDPOINT: http://mcp:8082/mcp
+#      BASE_PATH: /newsletter
+#      TZ: America/New_York
+#    volumes:
+#      - ./databook_newsletter/repo/output:/app/output
+#    depends_on:
+#      mcp:
+#        condition: service_healthy
+#    networks:
+#      - databook-network
   nginx:
     image: nginx:alpine
     container_name: databook-nginx
+    logging: *nginx-logging
     restart: unless-stopped
     ports:
       - "80:80"
@@ -160,6 +214,7 @@ services:
   mysql:
     image: mysql:8.0
     container_name: databook-mysql
+    logging: *default-logging
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${DB_DATABASE:-laravel}
@@ -175,6 +230,7 @@ services:
   postgres:
     image: postgres:10-alpine
     container_name: databook-postgres
+    logging: *default-logging
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-databook}
@@ -196,6 +252,7 @@ services:
   redis:
     image: redis:alpine
     container_name: databook-redis
+    logging: *default-logging
     restart: unless-stopped
     volumes:
       - redis-data:/data

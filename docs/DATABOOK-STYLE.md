@@ -38,6 +38,37 @@ Icons are **Bootstrap Icons** (`bi-*`) — never Font Awesome (it isn't loaded).
 - **Type scale + spacing:** use the `--db-*` tokens below, not ad-hoc px.
 - **Charts:** if using Chart.js, theme via the `DBChart` palette (navy/accent), money-formatted.
 
+## One declaration site — `databook-tokens.css`, and nothing else
+
+⚠⚠ `app/public/css/style.css` used to open with its OWN `:root` block redeclaring
+**fifteen** `--db-*` names, **nine of them with the same name and a different value** —
+its `--db-shadow-sm` was `rgba(0,0,0,0.05)` against the canonical `rgba(11,31,58,0.06)`,
+its `--db-transition` `0.2s` against `0.18s`. Every one was DEAD (the canonical file
+loads later and won every collision, measured on the live site), but dead *and wrong* is
+worse than duplicated: anyone reading that file saw values the site does not use.
+Deleted 2026-08-14; a guard (`api/tests/test_css_palette.py`) now fails the build if any
+file other than `databook-tokens.css` declares a `--db-*` token.
+
+⚠ **A colour literal in `style.css` is now a build failure** — the same guard pins
+off-palette hex at ZERO. Reference a token; do not add a literal. It does NOT yet cover
+named colours (`white`, `red`, `green`, `orange` — 15 uses) or `rgb()`/`rgba()` (41,
+mostly alpha overlays no hex token can express); both counts are pinned so they cannot
+grow silently.
+
+⚠ **Check whether a selector can still match before tokenizing its colour.** Of the 60
+off-palette literals left after the mechanical pass, **46 were fossil CSS** for markup
+the 2026-06 design-system migration replaced — an 18-hue org-chart palette for
+`.orgchart .node_<id>` when the chart renders `.db-node`, a disclaimer bar replaced by
+`.db-disclaimer`, a nav replaced by `.db-submenu`. The answer for those is `delete`, not
+`var()`. Verify both ways: no view or JS emits the class, AND `querySelectorAll` returns
+0 in a rendered page. One is not enough in either direction — `.submenu-nav` looked live
+because a view contains `db-submenu-nav` as a substring, and `.tt-suggestion` looked dead
+because typeahead.js generates it at runtime.
+
+⚠ **`.inner_container` is in 93 view files.** It is the page-body wrapper, not a page.
+Styling it to change one page repaints the whole site; scope with a page class instead
+(the landing uses `.db-home`).
+
 ## Design tokens (verbatim from `databook-tokens.css`)
 
 ```css

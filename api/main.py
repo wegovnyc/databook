@@ -1,9 +1,22 @@
 import json
+from types import SimpleNamespace
 import logging
 import os
+import secrets
+
+# Logging is configured FIRST, before the routers are imported, so that nothing
+# can log before there is a handler to receive it. uvicorn configures only its
+# own three loggers and leaves root at WARNING with an empty handler list, which
+# dropped every `logger.info` in this codebase (including the readiness signal
+# `digital spend map ready`) and left warnings printing as bare, level-less
+# lines via `logging.lastResort`. See modules/applog.py — it carries the
+# measurements and the reason this is one owner rather than a call per module.
+from modules import applog
+applog.configure()
+
 from modules import autoload
 import uvicorn
-from fastapi import Depends, FastAPI, Security, Query, Request, Path, HTTPException
+from fastapi import Depends, FastAPI, Security, Query, Request, Path, HTTPException, Header
 import asyncpg
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -21,7 +34,12 @@ from postgrex import CsvDataset
 from postgrex import PostgresModelAsync
 from modules import duckpool
 from modules import orgcore
+from modules import searchindexes
 from modules import orgfilter
+# Credential resolution lives in one place — see modules/dbcreds.py.
+from modules import dbcreds
+# The shared machine-to-machine key check — see modules/apikey.py.
+from modules import apikey
 from subprocess import Popen
 from routers.oce import router as oce_router
 from routers.budget_revenue import router as budget_revenue_router
@@ -31,6 +49,8 @@ from routers.data_pipeline import router as pipeline_router
 from routers.public_v1 import router as public_v1_router
 from routers.search import router as search_router
 from routers.org_admin import router as org_admin_router
+from routers.licenses import router as licenses_router
+from modules.errfmt import exc_str
 
 # Error tracking: enabled only when SENTRY_DSN is set in the environment,
 # so local dev and tests run without a Sentry account configured.
@@ -91,7 +111,72 @@ app.add_middleware(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+
+# --- Cache-Control on the read-only API ------------------------------------------
+# A Cloudflare Cache Rule caches GET /oce/* and /get/* at the edge, which is what
+# absorbs the distributed crawl documented in CLAUDE.md (525 distinct IPs, 82%
+# making exactly one request — no per-IP rate limit can see that traffic).
+#
+# ⚠⚠ THE ORDER OF THIS CHANGE AND THE CLOUDFLARE RULE IS LOAD-BEARING, in both
+# directions, and getting it wrong fails SILENTLY:
+#   * While the rule is `override_origin`, Cloudflare IGNORES these headers, so
+#     deploying this alone changes nothing at the edge. Harmless, and it is why
+#     the api must ship FIRST.
+#   * The moment the rule becomes `respect_origin`, an endpoint that sends NO
+#     Cache-Control stops being cached at all. That is why this is a middleware
+#     with a default rather than a header added per handler — a new /oce/ endpoint
+#     must not silently drop out of the cache by omission.
+# So: deploy the api, then flip the rule to respect_origin. Never the reverse.
+CACHEABLE_API_PREFIXES = ("/oce/", "/get/")
+API_EDGE_MAX_AGE = int(os.getenv("API_EDGE_MAX_AGE", "600"))
+
+
+@app.middleware("http")
+async def add_read_api_cache_control(request: Request, call_next):
+    response = await call_next(request)
+    # Only successful GETs, and never clobber a handler that set its own value —
+    # that is how a handler opts out (see oce._spend_cache_headers, which sends
+    # no-store while the contract spend map is still populating).
+    if (
+        request.method == "GET"
+        and response.status_code == 200
+        and request.url.path.startswith(CACHEABLE_API_PREFIXES)
+        and "cache-control" not in response.headers
+    ):
+        response.headers["Cache-Control"] = f"public, max-age={API_EDGE_MAX_AGE}"
+    return response
+
 manager = LoginManager(Config.fastapi['key'], '/login')
+
+
+# ── token scopes ─────────────────────────────────────────────────────────────
+#
+# ⚠ Until 2026-08-01 `/login` minted `scopes=['read']` HARDCODED and never read
+# `users.scope`, so no login token could reach any write endpoint. That looked
+# safe but it was vestigial, and the obvious "fix" — mint the token's scopes
+# from `users.scope` — would have silently made a human login able to DROP
+# tables via `/delete`, because that endpoint only required `write`.
+#
+# So the scopes are TIERED, and the tiers are the decision the exposure forced:
+#   read   every normal query
+#   write  ingest operations (`/upload`, `/log-ingestion`) — a data operator
+#   admin  DESTRUCTIVE or privileged ops (`/delete`) — the owner only
+# A `write` user can load data but cannot drop a table; only a `full`/`admin`
+# user gets `admin`. `users.scope` on prod is a single row, `full`.
+#
+# ⚠⚠ NONE OF THIS MATTERS WHILE THE SIGNING SECRET IS GUESSABLE. Scopes gate a
+# token the server ISSUED; they do nothing against a token an attacker FORGED,
+# and the JWT is signed with `Config.fastapi['key']`. That key must be a strong
+# secret (rotation: scripts/rotate-fastapi-key.sh) or a forger simply writes
+# `scopes:['admin']` into their own token. The scope tiers are defence in depth
+# behind that, not a substitute for it.
+def scopes_for(user_scope):
+    s = (user_scope or '').strip().lower()
+    if s in ('full', 'admin', 'superuser'):
+        return ['read', 'write', 'admin']
+    if s == 'write':
+        return ['read', 'write']
+    return ['read']
 user = User()
 select = PostgresModelAsync.select
 
@@ -118,6 +203,7 @@ app.include_router(pipeline_router)
 # routers/org_admin.require_editor; see that module for why it authorises on the
 # user row's scope rather than the token's.
 app.include_router(org_admin_router)
+app.include_router(licenses_router)
 
 
 @app.on_event("startup")
@@ -144,6 +230,30 @@ async def query_user(user_id: str):
     if result.get('rows'):
         return result['rows'][0]
     return None
+
+# JWT signing secrets that are published defaults — running with any of these
+# means anyone can forge a token with `scopes:['admin']` and DROP tables. The
+# scope tiers in scopes_for() are meaningless while this is true.
+_WEAK_SIGNING_KEYS = {'supersecretkey', 'secret', 'changeme', 'test-secret-key'}
+
+
+@app.on_event("startup")
+async def warn_on_weak_signing_key():
+    # ⚠ Turns "silently forgeable" into "screams on every boot until rotated".
+    # A WARNING, not a refusal: a refusal that misfires would brick the api, and
+    # the point is to be impossible to ignore, not to be a new outage mode.
+    key = (Config.fastapi or {}).get('key', '')
+    if key in _WEAK_SIGNING_KEYS:
+        msg = ("[SECURITY] the JWT signing secret is a PUBLISHED DEFAULT — anyone "
+               "can forge an admin token. Rotate it: scripts/rotate-fastapi-key.sh")
+        print("=" * 78 + f"\n{msg}\n" + "=" * 78, flush=True)
+        if os.getenv('SENTRY_DSN'):
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(msg, level='error')
+            except Exception:
+                pass
+
 
 @app.on_event("startup")
 async def startup():
@@ -180,7 +290,7 @@ async def startup():
                 await fn()
                 print(f"[startup] pre-warm done: {label}", flush=True)
             except Exception as e:
-                print(f"[startup] pre-warm failed ({label}): {e}", flush=True)
+                print(f"[startup] pre-warm failed ({label}): {exc_str(e)}", flush=True)
         print("[startup] Sequential cache pre-warm complete.", flush=True)
     asyncio.create_task(_sequential_prewarm())
     print("[startup] Sequential cache pre-warm started (dashboard -> digital-reform -> transactions -> briefing -> projects-map).")
@@ -194,34 +304,41 @@ async def startup():
             try:
                 await _build_briefing()
             except Exception as e:
-                print(f"[briefing] Cache rebuild failed: {e}", flush=True)
+                print(f"[briefing] Cache rebuild failed: {exc_str(e)}", flush=True)
     asyncio.create_task(_briefing_rebuild_loop())
     print("[startup] Briefing 6h rebuild loop started.")
 
 
 async def ensure_people_indexes():
-    """Create pg_trgm extension, trigram indexes, and B-tree indexes for performance.
+    """Apply the declared indexes for the three people tables at startup.
 
-    Trigram indexes enable fast ILIKE people search (~1-2s instead of minutes).
-    B-tree indexes on wegov-org-id enable fast org section filtering on large tables.
-    All statements are idempotent (IF NOT EXISTS).
+    ⚠⚠ THIS FUNCTION USED TO BE A SECOND DECLARATION SITE, and that was the defect:
+    it issued its own CREATE INDEX statements under names that differed from the ones
+    in `data_scheduler.TABLE_INDEXES`, so the same column was declared twice and only
+    the startup name ever existed. Worse, startup is a WEAK mechanism for a
+    pipeline-loaded table — /import-csv drops the table on every ingest and restores
+    only the GIN half — so `idx_civillist_titlecode` (the most-used index on that
+    table, 6,528 scans, declared nowhere else) was absent from each ingest until the
+    next api restart.
+
+    Now it calls the SAME function the post-ingest hook does, so there is one owner
+    for what an index is and two callers for when to apply it. Idempotent; ANALYZE on
+    the three tables measures ~1.8s in total, which is noise against startup.
     """
-    execute = PostgresModelAsync.execute
     try:
-        await execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-        # Trigram indexes for people search
-        await execute('CREATE INDEX IF NOT EXISTS idx_civillist_name_trgm ON civillist USING gin ("EMPLOYEE NAME" gin_trgm_ops)')
-        await execute("""CREATE INDEX IF NOT EXISTS idx_payrolldata_name_trgm ON payrolldata USING gin (("First Name" || ' ' || "Last Name") gin_trgm_ops)""")
-        await execute("""CREATE INDEX IF NOT EXISTS idx_cla_name_trgm ON civillistactive USING gin (("First Name" || ' ' || "Last Name") gin_trgm_ops)""")
-        # B-tree indexes for org section filtering (critical for payrolldata 6.8M, civillist 3.2M)
-        await execute('CREATE INDEX IF NOT EXISTS idx_payrolldata_orgid ON payrolldata ("wegov-org-id")')
-        await execute('CREATE INDEX IF NOT EXISTS idx_civillist_orgid ON civillist ("wegov-org-id")')
-        await execute('CREATE INDEX IF NOT EXISTS idx_civillist_titlecode ON civillist ("TITLE CODE")')
-        await execute('CREATE INDEX IF NOT EXISTS idx_civillistactive_orgid ON civillistactive ("wegov-org-id")')
+        # Lazy import: data_scheduler pulls in the whole enrichment stack, and this
+        # module is imported at startup either way — matching the scheduler_loop
+        # import above rather than adding a module-level dependency.
+        from data_scheduler import recreate_table_indexes
+        # `recreate_table_indexes` wants something with `.execute(sql)`;
+        # PostgresModelAsync.execute has exactly that shape, so a namespace is enough.
+        conn = SimpleNamespace(execute=PostgresModelAsync.execute)
+        for tbl in ("civillist", "payrolldata", "civillistactive"):
+            await recreate_table_indexes(conn, tbl)
         print("[startup] People search + org section indexes ensured.")
     except Exception as e:
         # Non-fatal: tables may not exist yet (first boot before data import)
-        print(f"[startup] Skipped people indexes: {e}")
+        print(f"[startup] Skipped people indexes: {exc_str(e)}")
 
 
 @app.on_event("shutdown")
@@ -721,7 +838,7 @@ async def _load_projects_map_cache():
         _projects_map_cache_time = time.time()
         print(f"[projects cache] Loaded {len(rows)} projects into map cache.")
     except Exception as e:
-        print(f"[projects cache] Failed to load: {e}")
+        print(f"[projects cache] Failed to load: {exc_str(e)}")
 
 @app.get('/get/capitalprojects/projectsnew', tags=['Capital Projects'])
 async def get_capital_projects_new():
@@ -1118,37 +1235,63 @@ async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str
 
 # ---- stats --------
 
+async def _pstats_select(type: str, query: str, params: tuple = ()):
+    """Run one capital-project stat over the capitalprojects_<type>_idx crosswalk.
+
+    Same guard as /get/districts/{type}/{id}/capitalprojects, which these eight
+    tiles sit alongside on the district page but never inherited:
+
+    * `type` is interpolated into the table name, so it is constrained to a safe
+      charset before any query runs (injection guard). Pass the template with the
+      `{}` still in it — formatting happens here so it cannot happen unguarded.
+    * Crosswalk tables exist for cd/cc/sd; nta has none (2010↔2020 NTA boundaries
+      don't crosswalk), so a missing relation must read as "no value" rather than
+      500. All eight tiles load per page view, so one nta visit raised eight
+      UndefinedTableErrors (Sentry DATABOOK-API-P).
+
+    Returns a single null `res` rather than empty rows, because that is the shape
+    a valid crosswalk with no matching rows already returns and the one the
+    frontend handles — it reads `resp['data'][0]['res'] ?? '-'`, which throws on
+    an empty array and renders `-` on a null.
+    """
+    if not re.fullmatch(r"[a-z]{2,4}", type):
+        return {"rows": [{"res": None}]}
+    try:
+        return await select(query.format(type), params)
+    except (asyncpg.exceptions.UndefinedColumnError, asyncpg.exceptions.UndefinedTableError):
+        return {"rows": [{"res": None}]}
+
 @app.get('/get/districts/pstats-projects_no/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_capital_projects_number_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT count(pp.*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT count(pp.*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
 
 @app.get('/get/districts/pstats-orig_cost/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_capital_projects_original_cost_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT sum(\"BUDG_ORIG\") RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT sum(\"BUDG_ORIG\") RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
 
 @app.get('/get/districts/pstats-curr_cost/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_capital_projects_current_cost_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT sum(cast(REPLACE(\"BUDG_CURR\", ',', '.') as decimal)) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT sum(cast(REPLACE(\"BUDG_CURR\", ',', '.') as decimal)) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
 
 @app.get('/get/districts/pstats-over_budg_am/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_capital_projects_overbudget_amount_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT -sum(cast(\"BUDG_DIFF\" as decimal)) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT -sum(cast(\"BUDG_DIFF\" as decimal)) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0", (id, pubdate))
 
 @app.get('/get/districts/pstats-long_no/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_delayed_capital_projects_number_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"DURATION_DIFF\" <> '-' AND cast(\"DURATION_DIFF\" as decimal) < 0".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"DURATION_DIFF\" <> '-' AND cast(\"DURATION_DIFF\" as decimal) < 0", (id, pubdate))
 
 @app.get('/get/districts/pstats-over_budg_no/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_number_of_overbudgeted_capital_projects_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0", (id, pubdate))
 
 @app.get('/get/districts/pstats-late_start_no/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_number_of_capital_projects_with_late_start_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"START_DIFF\" <> '-' AND cast(REPLACE(\"START_DIFF\", ',', '.') as decimal) < 0".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"START_DIFF\" <> '-' AND cast(REPLACE(\"START_DIFF\", ',', '.') as decimal) < 0", (id, pubdate))
 
 @app.get('/get/districts/pstats-late_end_no/{type}/{id}/{pubdate}', tags=['Districts'])
 async def get_number_of_capital_projects_with_late_end_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"END_DIFF\" <> '-' AND cast(REPLACE(\"END_DIFF\", ',', '.') as decimal) < 0".format(type), (id, pubdate))
+    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"END_DIFF\" <> '-' AND cast(REPLACE(\"END_DIFF\", ',', '.') as decimal) < 0", (id, pubdate))
 
 
 
@@ -1319,13 +1462,26 @@ def auth(data: OAuth2PasswordRequestForm = Depends()):
     access_token = manager.create_access_token(
         data={'sub': usr['id']}
         ,expires=datetime.timedelta(hours=24)
-        ,scopes=['read']
+        ,scopes=scopes_for(usr.get('scope'))
     )
     return {'access_token': access_token, 'token_type': 'bearer'}
 
 
     
-@app.post('/upload', tags=['Datasets'], summary="Upload CSV dataset", 
+def _api_key_ok(header_key: str, query_key: str) -> bool:
+    """Config-aware wrapper over the shared resolver.
+
+    The logic — header first, query parameter deprecated-but-accepted with a
+    warning, constant-time comparison, fail closed — lives in
+    `modules/apikey.py`, because `routers/org_admin.py` needs exactly the same
+    check and cannot import from `main` at module scope. There were THREE
+    independent comparisons against this secret and they had already drifted:
+    org_admin read the query parameter FIRST and compared with `==`.
+    """
+    return apikey.ok(header_key, query_key, Config.fastapi.get('key', '') or '')
+
+
+@app.post('/upload', tags=['Datasets'], summary="Upload CSV dataset",
         responses={200: {'description': 'Success', 'content': {'application/json': {'example': {'result': 'OK'}}}},
                    503: {'description': 'Failed', 'content': {'application/json': {'example': {'result': 'Fail'}}}}}
          )
@@ -1333,6 +1489,7 @@ async def upload_csv_dataset(
     url: str = '',
     idxs: str = '',
     api_key: str = None,
+    x_api_key: str = Header(None, alias="X-API-Key"),
     request: Request = None,
     user=Security(manager, scopes=['write'], use_cache=False)
 ):
@@ -1341,14 +1498,16 @@ async def upload_csv_dataset(
 
     - **url**: CSV file url
     - **idxs**: comma separated fields list for adding database indexes
-    - **api_key**: Optional API key for machine-to-machine auth
+    - **X-API-Key**: header carrying the API key for machine-to-machine auth
+    - **api_key**: DEPRECATED query-parameter form — it lands in the access log
+      in plaintext. Send the `X-API-Key` header instead.
     """
     # Allow API key auth for internal automation
-    if not api_key or api_key != Config.fastapi.get('key', ''):
+    if not _api_key_ok(x_api_key, api_key):
         if not user:
             return JSONResponse(
                 status_code=401,
-                content={'error': 'Invalid credentials - provide api_key or Bearer token'}
+                content={'error': 'Invalid credentials - provide X-API-Key or Bearer token'}
             )
     if not url:
         return {'error': 'malformed request'}
@@ -1427,14 +1586,13 @@ async def import_crol_async(url: str):
                 seen[col] = 0
                 clean_cols.append(col)
         
-        # Connect to database
-        db = await asyncpg.connect(
-            user=Config.db['user'],
-            password=Config.db['pwd'],
-            database=Config.db['dbname'],
-            host=Config.db['host']
-        )
-        
+        # Connect to database. Environment first, env.yaml only as a fallback —
+        # dbcreds resolves secret file / env var / YAML in that order and reads
+        # the YAML keys with .get(), so a config that no longer carries a `pwd:`
+        # (the box's, since the credential moved to Docker secrets) cannot raise
+        # KeyError here. See modules/dbcreds.py.
+        db = await asyncpg.connect(**dbcreds.settings(Config.db))
+
         try:
             # Drop and recreate table
             await db.execute('DROP TABLE IF EXISTS crol')
@@ -1483,19 +1641,30 @@ async def import_crol_async(url: str):
                     WHERE "EventDate" != '' AND length("EventDate") >= 10
                 """)
 
-            # Create indexes (only for columns that exist)
-            if 'start_date_parsed' in clean_cols:
-                await db.execute('CREATE INDEX idx_crol_start_date ON crol(start_date_parsed)')
-            # Always create event_date_parsed partial index (only rows with dates)
-            # Partial index avoids seq scan on 1M rows when only 16K have event dates
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_crol_event_date ON crol(event_date_parsed) WHERE event_date_parsed IS NOT NULL')
-            for idx_col, idx_name in [
-                ('SectionName', 'idx_crol_section'),
-                ('wegov-org-id', 'idx_crol_wegov_org_id'),
-            ]:
-                if idx_col in clean_cols:
-                    await db.execute(f'CREATE INDEX {idx_name} ON crol("{idx_col}")')
-            await db.execute('ANALYZE crol')
+            # ⚠ The index list moved to data_scheduler.TABLE_INDEXES['crol'].
+            # It lived here as a literal — and as a verbatim SECOND copy in
+            # import_csv_async below — so crol had THREE declaration sites and the
+            # two trim("PIN") indexes the crosswalk needs were in none of them.
+            # This drops the table on every import, so the indexes must be rebuilt
+            # here rather than left to the scheduler's later hook call.
+            #
+            # ⚠⚠ AND THERE IS NO "SCHEDULER'S LATER HOOK CALL" FOR crol — measured
+            # 2026-08-18, not assumed. All four `run_post_ingest_hooks` call sites
+            # live in data_scheduler and fire only for tables the SCHEDULER
+            # ingests; crol arrives through this endpoint (the normalizer POSTs
+            # /import-crol), so nothing here ever invoked the hooks. The proof is
+            # in the log: contracts/solicitations/vendors each print
+            # "[hooks] Running N post-ingest hook(s)" before their index lines and
+            # crol printed its index lines with no such wrapper.
+            #
+            # So this calls the HOOK RUNNER rather than the index rebuild directly.
+            # `POST_INGEST_HOOKS['crol'][0]` *is* recreate_table_indexes(conn,
+            # 'crol'), so the indexes are still rebuilt first and nothing about the
+            # old behaviour changes — but anything else registered on crol now
+            # actually runs. Registering a hook that never fires is worse than
+            # having no hook, because the data looks maintained.
+            from data_scheduler import run_post_ingest_hooks
+            await run_post_ingest_hooks('crol', db)
             
         finally:
             await db.close()
@@ -1520,7 +1689,7 @@ async def log_ingestion(table_name: str, s3_url: str, status: str, row_count: in
             VALUES ($1, $2, $3, $4, $5)
         """, (table_name, s3_url, status, row_count, error_message))
     except Exception as e:
-        print(f"Failed to log ingestion: {e}")
+        print(f"Failed to log ingestion: {exc_str(e)}")
 
 
 async def update_registry_status(table_name: str, status: str,
@@ -1553,7 +1722,7 @@ async def update_registry_status(table_name: str, status: str,
                    WHERE table_name = $1""",
                 (table_name, (error_message or '')[:500]))
     except Exception as e:
-        print(f"Failed to update registry status for {table_name}: {e}")
+        print(f"Failed to update registry status for {table_name}: {exc_str(e)}")
 
 
 @app.post('/log-ingestion', tags=['Datasets'], summary="Log dataset ingestion (for normalizers)")
@@ -1584,53 +1753,19 @@ async def post_log_ingestion(
         return JSONResponse(status_code=500, content={'result': 'Fail', 'error': str(e)})
 
 
-# Global-search recall/ranking indexes, as (index_name, table, "USING ..." body).
-# Single source of truth: /import-csv recreates these after a re-import (tables are
-# DROP+CREATEd, which silently wipes every index), and scripts/search_fts_indexes.sql
-# backfills the same set once on prod. The to_tsvector('english', col) expressions
-# MUST stay byte-identical to the ones in api/routers/search.py so the planner uses
-# the GIN index. trgm = substring/typo recall for ILIKE; fts = word-order + stemming.
-SEARCH_INDEXES = [
-    ("idx_orgs_name_trgm",        "wegov_orgs",            'gin ("name" gin_trgm_ops)'),
-    ("idx_orgs_altname_trgm",     "wegov_orgs",            'gin ("alternate_name" gin_trgm_ops)'),
-    ("idx_orgs_name_fts",         "wegov_orgs",            "gin (to_tsvector('english', name))"),
-    ("idx_orgs_altname_fts",      "wegov_orgs",            "gin (to_tsvector('english', \"alternate_name\"))"),
-    ("idx_titles_descr_trgm",     "nyccivilservicetitles", 'gin ("Title Description" gin_trgm_ops)'),
-    ("idx_titles_descr_fts",      "nyccivilservicetitles", "gin (to_tsvector('english', \"Title Description\"))"),
-    ("idx_contracts_title_trgm",  "contracts",             'gin (contract_title gin_trgm_ops)'),
-    ("idx_contracts_vendor_trgm", "contracts",             'gin (vendor_name gin_trgm_ops)'),
-    ("idx_contracts_title_fts",   "contracts",             "gin (to_tsvector('english', contract_title))"),
-    ("idx_solic_name_trgm",       "solicitations",         'gin ("Procurement Name" gin_trgm_ops)'),
-    ("idx_solic_name_fts",        "solicitations",         "gin (to_tsvector('english', \"Procurement Name\"))"),
-    ("idx_capproj_desc_trgm",     "capitalprojectslist",   'gin (description gin_trgm_ops)'),
-    ("idx_capproj_desc_fts",      "capitalprojectslist",   "gin (to_tsvector('english', description))"),
-    ("idx_crol_shorttitle_trgm",  "crol",                  'gin ("ShortTitle" gin_trgm_ops)'),
-    ("idx_crol_shorttitle_fts",   "crol",                  "gin (to_tsvector('english', \"ShortTitle\"))"),
-    ("idx_schools_name_trgm",     "schoollocations",       'gin (location_name gin_trgm_ops)'),
-    ("idx_schools_name_fts",      "schoollocations",       "gin (to_tsvector('english', location_name))"),
-    ("idx_cla_name_trgm",         "civillistactive",       'gin ((("First Name" || \' \' || "Last Name")) gin_trgm_ops)'),
-    ("idx_gb_name_trgm",          "nycgreenbook",          'gin ((("First Name" || \' \' || "Last Name")) gin_trgm_ops)'),
-]
-
-
+# ⚠ THE DECLARATIONS MOVED to modules/searchindexes.py, and this call site is now a
+# thin wrapper over it. They lived here as a literal list applied only by /import-csv,
+# while `contracts` and `solicitations` are loaded by the EXTRACTOR path — which drops
+# and renames their tables and never ran this. Measured 2026-08-13: 5 of the 19
+# declared search indexes were missing on prod, all 5 on those two tables. The shared
+# module is applied by BOTH paths (here, and data_scheduler's post-ingest hook).
 async def _ensure_search_indexes(db, table_name: str):
     """Recreate the global-search GIN indexes for a freshly (re)imported table.
 
     /import-csv does DROP TABLE + CREATE + COPY, which drops all indexes — without
-    this, search silently degrades to seq-scans (e.g. crol's index was missing on
-    prod because CROL re-imports daily). Best-effort: a failing index (missing
-    column, pg_trgm absent) is logged, never fatal to the import."""
-    try:
-        await db.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-    except Exception as exc:  # noqa: BLE001
-        logging.warning(f"[import] pg_trgm ensure failed: {exc}")
-    for name, tbl, body in SEARCH_INDEXES:
-        if tbl != table_name:
-            continue
-        try:
-            await db.execute(f'CREATE INDEX IF NOT EXISTS {name} ON "{tbl}" USING {body}')
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(f"[import] search index {name} on {tbl} failed: {exc}")
+    this, search silently degrades to seq-scans. Best-effort: a failing index
+    (missing column, pg_trgm absent) is logged, never fatal to the import."""
+    await searchindexes.ensure(db, table_name, log=logging.warning)
 
 
 @app.post('/import-csv', tags=['Datasets'], summary="Import CSV dataset (streaming)")
@@ -1638,17 +1773,20 @@ async def import_csv_async(
     url: str,
     table_name: str,
     api_key: str = None,
+    x_api_key: str = Header(None, alias="X-API-Key"),
     request: Request = None
 ):
-    # Allow API key auth for internal automation OR JWT auth
-    if api_key and api_key == Config.fastapi['key']:
+    # Allow API key auth for internal automation OR JWT auth.
+    # X-API-Key header preferred; the api_key query param is deprecated because
+    # it is written to the access log in plaintext. See _api_key_ok.
+    if _api_key_ok(x_api_key, api_key):
         pass  # Authorized via API key
     else:
         # Try JWT auth
         try:
             token = request.headers.get('Authorization', '').replace('Bearer ', '')
             if not token:
-                return JSONResponse(status_code=401, content={'result': 'Fail', 'error': 'Invalid credentials - provide api_key or Bearer token'})
+                return JSONResponse(status_code=401, content={'result': 'Fail', 'error': 'Invalid credentials - provide X-API-Key or Bearer token'})
             user = await manager.get_current_user(token)
             if not user:
                 return JSONResponse(status_code=401, content={'result': 'Fail', 'error': 'Invalid credentials'})
@@ -1710,14 +1848,13 @@ async def import_csv_async(
                 seen[col] = 0
                 clean_cols.append(col)
         
-        # Connect to database
-        db = await asyncpg.connect(
-            user=Config.db['user'],
-            password=Config.db['pwd'],
-            database=Config.db['dbname'],
-            host=Config.db['host']
-        )
-        
+        # Connect to database. Environment first, env.yaml only as a fallback —
+        # dbcreds resolves secret file / env var / YAML in that order and reads
+        # the YAML keys with .get(), so a config that no longer carries a `pwd:`
+        # (the box's, since the credential moved to Docker secrets) cannot raise
+        # KeyError here. See modules/dbcreds.py.
+        db = await asyncpg.connect(**dbcreds.settings(Config.db))
+
         try:
             # Drop and recreate table
             await db.execute(f'DROP TABLE IF EXISTS "{table_name}"')
@@ -1767,16 +1904,11 @@ async def import_csv_async(
                         WHERE "EventDate" != '' AND length("EventDate") >= 10
                     """)
 
-                if 'start_date_parsed' in clean_cols:
-                    await db.execute('CREATE INDEX idx_crol_start_date ON crol(start_date_parsed)')
-                await db.execute('CREATE INDEX IF NOT EXISTS idx_crol_event_date ON crol(event_date_parsed) WHERE event_date_parsed IS NOT NULL')
-                for idx_col, idx_name in [
-                    ('SectionName', 'idx_crol_section'),
-                    ('wegov-org-id', 'idx_crol_wegov_org_id'),
-                ]:
-                    if idx_col in clean_cols:
-                        await db.execute(f'CREATE INDEX {idx_name} ON crol("{idx_col}")')
-                await db.execute('ANALYZE crol')
+                # ⚠ THE SECOND COPY of the same block, now also delegated. See
+                # data_scheduler.TABLE_INDEXES['crol'] — and the note at the other
+                # site for why this calls the hook runner, not the index rebuild.
+                from data_scheduler import run_post_ingest_hooks
+                await run_post_ingest_hooks('crol', db)
 
             # Refresh planner stats so pg_class.reltuples is accurate
             # immediately. The health dashboard reads reltuples (an estimate)
@@ -2581,11 +2713,17 @@ async def get_pstats_categories_by_type(tslug: str):
         responses={200: {'description': 'Success', 'content': {'application/json': {'example': {'result': 'OK'}}}},
                    404: {'description': 'Failed', 'content': {'application/json': {'example': {'result': 'Not found'}}}}}
          )
-def delete_dataset_in_database(tbl:str, user=Security(manager, scopes=['write'])):
+def delete_dataset_in_database(tbl:str, user=Security(manager, scopes=['admin'])):
     """
     Delete dataset table in database:
 
     - **tbl**: Table name same as dataset name to delete
+
+    ⚠ Requires the `admin` scope, NOT merely `write` — this DROPs a table. A data
+    operator (`write`) must not reach it, and the app's own service token is
+    `write`, so it cannot either. The name is validated against a plain-identifier
+    pattern AND actual existence in `CsvDataset.delete` before any DROP (it used
+    to be interpolated raw). No caller in the app or pipeline references this.
     """
     ds = CsvDataset()
     if ds.delete(tbl):

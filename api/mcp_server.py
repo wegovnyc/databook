@@ -28,6 +28,7 @@ import aiohttp
 from cachetools import TTLCache
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
+from modules.errfmt import exc_str
 
 # Credential resolution lives in one place — see modules/dbcreds.py.
 try:
@@ -2518,7 +2519,7 @@ async def _fetch_json(url: str) -> dict | list | None:
                 continue
             return None
         except Exception as e:
-            logger.error(f"HTTP FETCH ERROR ({url}): {e}")
+            logger.error(f"HTTP FETCH ERROR ({url}): {exc_str(e)}")
             return None
 
 
@@ -3281,7 +3282,7 @@ async def get_hearing_briefing(event_id: str, year: int = 2026) -> str:
                     )
                 sections.append("")
         except Exception as e:
-            logger.warning(f"[hearing-brief] contracts query error: {e}")
+            logger.warning(f"[hearing-brief] contracts query error: {exc_str(e)}")
 
         # 5b. Budget summary
         try:
@@ -3307,7 +3308,7 @@ async def get_hearing_briefing(event_id: str, year: int = 2026) -> str:
                     )
                 sections.append("")
         except Exception as e:
-            logger.warning(f"[hearing-brief] budget query error: {e}")
+            logger.warning(f"[hearing-brief] budget query error: {exc_str(e)}")
 
         # 5c. Capital projects
         try:
@@ -3334,7 +3335,7 @@ async def get_hearing_briefing(event_id: str, year: int = 2026) -> str:
                     )
                 sections.append("")
         except Exception as e:
-            logger.warning(f"[hearing-brief] capital projects query error: {e}")
+            logger.warning(f"[hearing-brief] capital projects query error: {exc_str(e)}")
 
         # 5d. Recent CROL notices
         try:
@@ -3363,7 +3364,7 @@ async def get_hearing_briefing(event_id: str, year: int = 2026) -> str:
                     )
                 sections.append("")
         except Exception as e:
-            logger.warning(f"[hearing-brief] CROL query error: {e}")
+            logger.warning(f"[hearing-brief] CROL query error: {exc_str(e)}")
 
         # 5e. Open jobs
         try:
@@ -3378,7 +3379,7 @@ async def get_hearing_briefing(event_id: str, year: int = 2026) -> str:
             if row and row.get("open_jobs", 0) > 0:
                 sections.append(f"**Open Positions:** {row['open_jobs']} job(s) currently posted\n")
         except Exception as e:
-            logger.warning(f"[hearing-brief] jobs query error: {e}")
+            logger.warning(f"[hearing-brief] jobs query error: {exc_str(e)}")
 
     sections.append("---")
     sections.append("*Data from Databook.NYC. Use individual tools (e.g., `get_agency_budget`, "

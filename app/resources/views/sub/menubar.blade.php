@@ -95,8 +95,9 @@
                 ['Agencies',      route('procurement.agencies'),      Request::is('procurement/agencies*') || Request::is('procurement/agency*')],
                 // Orange = Analysis product (analyst/AI-enriched, not raw official data).
                 ['Digital Services Analysis', route('research.digital-reform'), Request::is('research/digital-reform*'), [
-                    ['Overview',                route('research.digital-reform'),          Request::is('research/digital-reform') && !Request::is('research/digital-reform/expiring')],
+                    ['Overview',                route('research.digital-reform'),          Request::is('research/digital-reform') && !Request::is('research/digital-reform/expiring') && !Request::is('research/digital-reform/licenses*')],
                     ['Contracts Expiring Soon', route('research.digital-reform.expiring'), Request::is('research/digital-reform/expiring')],
+                    ['Software Licenses',       route('research.digital-reform.licenses'), Request::is('research/digital-reform/licenses*')],
                 ]],
             ],
         ],

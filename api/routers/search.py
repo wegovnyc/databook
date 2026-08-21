@@ -24,10 +24,30 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query
 from modules.postgrex.asyncmodel import PostgresModelAsync
 from modules.duckpool import to_duckdb_thread
+from modules.errfmt import exc_str
 from modules import orgfilter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Search"])
+
+# The exception class that means "this SQL is malformed" and nothing else —
+# SQLSTATE 42601. Resolved once at import so `_rows` does not pay for it per
+# query, and tolerant of asyncpg being absent (the unit suite imports this
+# module without a driver) — an empty tuple simply means the `except` below can
+# never match and every failure keeps the old WARNING behaviour, which is the
+# safe direction to degrade in.
+#
+# ⚠ Do NOT widen this to the shared parent `asyncpg.exceptions.SyntaxOrAccessError`
+# (verified: it is the immediate base of all three). `UndefinedTableError` (42P01)
+# and `UndefinedColumnError` (42703) sit under it beside `PostgresSyntaxError`
+# (42601), and the first two are a legitimate fresh-env state throughout this
+# codebase — promoting them would raise a Sentry event for every derived table
+# whose job has not run yet, and the alert would be muted within a week.
+try:
+    from asyncpg.exceptions import PostgresSyntaxError as _PostgresSyntaxError
+    _SYNTAX_ERRORS = (_PostgresSyntaxError,)
+except Exception:  # noqa: BLE001 — driver absent (unit suite); degrade to WARNING
+    _SYNTAX_ERRORS = ()
 
 PER_TYPE = 8        # results shown per type in the grouped /search preview
 SUGGEST_PER_TYPE = 4  # per-type cap before the flat suggest list is trimmed
@@ -41,11 +61,52 @@ def _slug(s: str) -> str:
 
 async def _rows(sql: str, params: list) -> list:
     """Run a query, returning [] on any failure (one slow/failed type must not
-    sink the whole federated search)."""
+    sink the whole federated search).
+
+    ⚠⚠ THE DEGRADATION IS INVISIBLE BY CONSTRUCTION, so the LEVEL is the only
+    thing that can distinguish a bug from a fresh environment. `global_search`
+    appends a group only `if res`, so a builder that returns [] does not render
+    as an empty section — it is **omitted from the payload entirely**, and the
+    response is still 200. There is no shape difference between "no person is
+    called that" and "the people query has been failing for eight weeks".
+
+    That is not hypothetical: a `LIMIT` on each arm of `_people`'s `UNION ALL`
+    without parenthesising the arms is a Postgres **syntax error**, so the people
+    group returned [] on every search from 2026-06-19 (`0e9a614`) to 2026-08-14.
+    `q=garcia` returned `total: 0` while the database held ten matching people.
+    Nobody was alerted, because a `logger.warning` is a Sentry BREADCRUMB and a
+    breadcrumb ships only if an ERROR follows in the same request scope — which
+    never happens here, since every failure path returns 200.
+
+    So the split below is by **what the exception can possibly mean**:
+
+    * `PostgresSyntaxError` (SQLSTATE 42601) — the SQL is malformed. This is
+      never transient, never environmental and never data-dependent: it fails
+      identically on every request forever, on every deployment, from the moment
+      it is written. It is *always* a code defect → **ERROR**, which the
+      LoggingIntegration's EventHandler (level 40) turns into a Sentry event.
+    * everything else — chiefly `UndefinedTableError` / `UndefinedColumnError`,
+      which this repo deliberately treats as a legitimate fresh-environment
+      state (derived tables simply do not exist until their job has run), plus
+      genuine transients like a timeout → **WARNING**, as before.
+
+    ⚠ The narrow catch is load-bearing. `PostgresSyntaxError`,
+    `UndefinedTableError` and `UndefinedColumnError` all share the immediate
+    base `asyncpg.exceptions.SyntaxOrAccessError` (verified, not assumed), so
+    catching the PARENT would promote every absent derived table on a fresh env
+    to a Sentry event and the alert would be ignored within a week. Match 42601
+    and nothing else — `test_the_syntax_error_tuple_does_not_include_the_class_42_parent`
+    fails if that widens.
+    """
     try:
         return await PostgresModelAsync.select_safe(sql, params) or []
+    except _SYNTAX_ERRORS as exc:
+        # Deliberately louder than the branch below — see the docstring.
+        logger.error(f"[search] query is malformed (this is a bug, not a "
+                     f"missing table): {exc_str(exc)}")
+        return []
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[search] query failed: {exc}")
+        logger.warning(f"[search] query failed: {exc_str(exc)}")
         return []
 
 
@@ -221,20 +282,32 @@ async def _notices(like, term, prefix, limit):
 async def _people(like, term, prefix, limit):
     # Search the small, fast authoritative sources for the preview; the
     # dedicated /people/search page covers the 3M+/6M+ historical tables.
+    #
+    # ⚠⚠ THE PARENTHESES AROUND EACH ARM ARE LOAD-BEARING, NOT STYLE. A bare
+    # `LIMIT` binds to the whole UNION, so `SELECT … LIMIT $2 UNION ALL SELECT …`
+    # is a Postgres SYNTAX ERROR (42601) — "syntax error at or near UNION". To
+    # cap each arm independently the arm must be parenthesised.
+    #
+    # This shipped unparenthesised in 0e9a614 (2026-06-19) and the people group
+    # returned [] on EVERY search until 2026-08-14. It was invisible for eight
+    # weeks because `global_search` omits a group when its builder returns no
+    # rows, so the payload for `q=garcia` was `total: 0, groups: []` while the
+    # database held ten matching people — a wrong answer that looks exactly like
+    # a correct one. See `_rows` for why the failure is now an ERROR.
     rows = await _rows("""
-        SELECT TRIM("First Name" || ' ' || "Last Name") AS fullname,
-               COALESCE("List Agency Desc", '') AS org, "Published Date" AS dt,
-               'civillistactive' AS tbl
-        FROM civillistactive
-        WHERE ("First Name" || ' ' || "Last Name") ILIKE $1
-        LIMIT $2
+        (SELECT TRIM("First Name" || ' ' || "Last Name") AS fullname,
+                COALESCE("List Agency Desc", '') AS org, "Published Date" AS dt,
+                'civillistactive' AS tbl
+         FROM civillistactive
+         WHERE ("First Name" || ' ' || "Last Name") ILIKE $1
+         LIMIT $2)
         UNION ALL
-        SELECT TRIM("First Name" || ' ' || "Last Name") AS fullname,
-               COALESCE("wegov-org-name", '') AS org, '' AS dt,
-               'nycgreenbook' AS tbl
-        FROM nycgreenbook
-        WHERE ("First Name" || ' ' || "Last Name") ILIKE $1
-        LIMIT $2
+        (SELECT TRIM("First Name" || ' ' || "Last Name") AS fullname,
+                COALESCE("wegov-org-name", '') AS org, '' AS dt,
+                'nycgreenbook' AS tbl
+         FROM nycgreenbook
+         WHERE ("First Name" || ' ' || "Last Name") ILIKE $1
+         LIMIT $2)
     """, [like, limit])
     prefixes = {'civillistactive': 'cla', 'nycgreenbook': 'gb'}
     out = []

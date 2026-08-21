@@ -39,6 +39,11 @@
 @php
     $flagMeta = [
         'build_your_own'       => ['cls' => 'db-badge-info',     'icon' => 'bi-robot'],
+        // The lever a non-software-licence purchase actually has. See the API's
+        // CLASS_LEVER_LABELS: asking "could we build this?" of hosting or a support
+        // tier answers "no" and hides the money, so those rows get their own
+        // question instead. The label varies with the class; the key does not.
+        'class_lever'          => ['cls' => 'db-badge-info',     'icon' => 'bi-tags'],
         'non_competitive'      => ['cls' => 'db-badge-warning',  'icon' => 'bi-shield-exclamation'],
         'no_rebid'             => ['cls' => 'db-badge-neutral',  'icon' => 'bi-megaphone'],
         'scope_growth'         => ['cls' => 'db-badge-neutral',  'icon' => 'bi-graph-up-arrow'],
@@ -49,6 +54,7 @@
     ];
     $flagOptions = [
         'build_your_own'       => 'Build-your-own candidate',
+        'class_lever'          => 'Different lever (price, tier, content)',
         'underused'            => 'Underused (shelfware)',
         'non_competitive'      => 'Non-competitive award',
         'renewal_chain'        => 'Renewal chain',
@@ -57,13 +63,24 @@
         'high_value_near_term' => 'High value, near-term',
         'vendor_lock_in'       => 'Vendor lock-in',
     ];
-    $buildbuyOptions = ['high' => 'High &mdash; easily replaceable', 'medium' => 'Medium &mdash; feasible', 'low' => 'Low &mdash; specialized'];
+    // Plain text only: these render through Blade escaping ({{ $bl }}), so an HTML entity
+    // here reaches the user literally. Parenthetical matches $flagOptions ("Underused
+    // (shelfware)") and stays ASCII per #66, which is what put "&mdash;" here.
+    $buildbuyOptions = ['high' => 'High (easily replaceable)', 'medium' => 'Medium (feasible)', 'low' => 'Low (specialized)'];
     $expSummary = $expiring['summary'] ?? [];
     $expOptions = $expiring['options'] ?? ['years' => [], 'agencies' => [], 'methods' => [], 'categories' => []];
     $expFiltered = ($expiringYear || $expiringAgency || $expiringMethod || $expiringMin || $expiringFlag
-                    || $expiringCategory || $expiringLicense || $expiringBuildbuy || $expiringShowNonTech);
+                    || $expiringCategory || $expiringLicense || $expiringBuildbuy || $expiringShowNonTech
+                    || $expiringProduct);
     $expCtl = ['expiring_flag','expiring_year','expiring_agency','expiring_method','expiring_min','expiring_sort',
                'expiring_page','expiring_category','expiring_license','expiring_buildbuy','expiring_shownontech'];
+    // Which scope the API served, read from the payload rather than assumed.
+    // ⚠ The whole section is on the derived scope as of 2026-08-13 (the Overview was
+    // the last page on the old one), so this no longer distinguishes THIS page from
+    // its siblings — it distinguishes a live page from a rolled-back one, which is
+    // still worth reading from the payload rather than asserting in copy.
+    $expScope = $expiring['scope'] ?? [];
+    $expPositiveScope = (bool) ($expScope['positive'] ?? false);
 @endphp
 <div class="inner_container">
     <div class="container" style="padding-top: var(--db-space-3); padding-bottom: var(--db-space-5);">
@@ -72,13 +89,17 @@
         <div class="db-eyebrow">Procurement &middot; Digital Services <span class="db-analysis-badge"><i class="bi bi-stars"></i> Analysis</span></div>
         <h1>Renewal Review Queue</h1>
         <p class="db-page-lead" style="max-width: none;">
-            Every digital contract expiring before January 2030, with signals to help decide which ones
-            <strong>shouldn't be renewed as-is</strong> &mdash; services the city could plausibly build itself with
-            open-source / AI tooling, non-competitive awards, no replacement bid yet posted, runaway scope,
-            shelfware, and vendor lock-in. Each flag is explained; expand a row for the full dossier and any
-            linked City Record notices.
+            Every technology contract expiring before January 2030, with signals to help decide which ones
+            <strong>shouldn't be renewed as-is</strong> &mdash; non-competitive awards, no replacement bid yet
+            posted, runaway scope, shelfware, vendor lock-in, and, where it is the right question, whether the
+            city could plausibly build the thing itself. Each flag is explained; expand a row for the full
+            dossier and any linked City Record notices.
         </p>
         @include('sub.analysis-banner')
+        {{-- ONE scope note for the whole section — see the partial. A guard asserts
+             all three pages include it, because three pages explaining themselves
+             three different ways is how the section ended up with two universes. --}}
+        @include('sub.digital-scope-note', ['scope' => $expiring['scope'] ?? []])
 
         {{-- Summary strip (reflects the current filters) --}}
         <div class="db-stat-grid mt-3 mb-4">
@@ -87,11 +108,32 @@
                 <div class="db-stat-value">{{ number_format($expSummary['count'] ?? 0) }}</div>
                 <div class="db-stat-sub">{{ $expFiltered ? 'Matching filters' : 'Digital contracts' }}</div>
             </div>
+            @php
+                // ⚠ COMMITTED MONEY AND CEILINGS ARE NOT ONE NUMBER. 57 of these
+                // rows are master agreements whose figure is headroom agencies may
+                // buy against — 0% carry a payment under their own id, against 88%
+                // of ordinary contracts. Summing them produced a headline that read
+                // as spend and was 44% ceiling. Falls back to the old key so an
+                // older cached payload still renders a number rather than $0.
+                $expCommitted = $expSummary['committed_value'] ?? $expSummary['total_value'] ?? 0;
+                $expCeiling   = $expSummary['ceiling_value'] ?? 0;
+                $expCeilingN  = $expSummary['ceiling_count'] ?? 0;
+                // Blade trap: a directive glued to a word character is not compiled,
+                // so the phrase is built here rather than inline.
+                $expCeilingSub = $expCeilingN . ' master ' . ($expCeilingN == 1 ? 'agreement' : 'agreements');
+            @endphp
             <div class="db-stat is-accent">
                 <div class="db-stat-label">Value Up for Renewal</div>
-                <div class="db-stat-value">${{ number_format(($expSummary['total_value'] ?? 0) / 1000000, 1) }}M</div>
-                <div class="db-stat-sub">Total awarded</div>
+                <div class="db-stat-value">${{ number_format($expCommitted / 1000000, 1) }}M</div>
+                <div class="db-stat-sub">Committed contract value</div>
             </div>
+            @if($expCeiling > 0)
+            <div class="db-stat">
+                <div class="db-stat-label"><i class="bi bi-layers"></i> Ceilings, not spend</div>
+                <div class="db-stat-value">${{ number_format($expCeiling / 1000000, 1) }}M</div>
+                <div class="db-stat-sub">{{ $expCeilingSub }} &mdash; headroom to buy against</div>
+            </div>
+            @endif
             <div class="db-stat">
                 <div class="db-stat-label"><i class="bi bi-robot"></i> Build-your-own</div>
                 <div class="db-stat-value">{{ number_format($expSummary['build_your_own'] ?? 0) }}</div>
@@ -110,11 +152,30 @@
             <div class="db-stat">
                 <div class="db-stat-label"><i class="bi bi-key"></i> Software licenses</div>
                 <div class="db-stat-value">{{ number_format($expSummary['licenses'] ?? 0) }}</div>
-                <div class="db-stat-sub">Of the above</div>
+                <div class="db-stat-sub">${{ number_format(($expSummary['licenses_value'] ?? 0) / 1000000, 1) }}M &middot;
+                    <a href="{{ route('research.digital-reform.licenses') }}">analysed in full</a></div>
             </div>
         </div>
 
-        @if(($expSummary['nontech_excluded'] ?? 0) > 0)
+        {{-- ⚠⚠ THIS REPLACED THE "N likely non-tech contracts are hidden" NOTE, which
+             is retired rather than dropped. Under the old vendor-name scope "digital"
+             admitted pest control and ship repair, so the page had to hide 105
+             confirmed non-tech contracts and say so. The scope is now a positive
+             condition, so nothing can be admitted and then hidden: `nontech_excluded`
+             is measured, and it is 0 by construction. Saying that out loud is the
+             honesty the old note was providing. --}}
+        @if($expPositiveScope)
+        <p class="text-muted mb-3" style="font-size: var(--db-text-sm);">
+            <i class="bi bi-funnel"></i> <strong>Nothing is filtered out of this queue.</strong>
+            A contract is here because the classification pass confirmed it is technology, one row per
+            contract &mdash; so there is no mis-tagged remainder to hide. The earlier scope selected
+            <em>vendors by name</em>, which admitted contracts that were not technology at all and needed a
+            "some are hidden" disclosure to stay honest.
+            @if(($expSummary['nontech_excluded'] ?? 0) > 0)
+                <span class="db-badge db-badge-danger">Measured {{ number_format($expSummary['nontech_excluded']) }} &mdash; report this</span>
+            @endif
+        </p>
+        @elseif(($expSummary['nontech_excluded'] ?? 0) > 0)
         <p class="text-muted mb-3" style="font-size: var(--db-text-sm);">
             <i class="bi bi-funnel"></i> {{ number_format($expSummary['nontech_excluded']) }} likely non-tech
             contracts (mis-tagged as digital &mdash; pest control, ship repair, etc.) are hidden.
@@ -216,17 +277,35 @@
                             <input type="checkbox" name="expiring_license" value="1" {{ $expiringLicense ? 'checked' : '' }}> Licenses only
                         </label>
                     </div>
+                    {{-- ⚠ The "Include non-tech" checkbox was removed with the scope change: on a
+                         positive scope it can only ever be a no-op control. The query parameter is
+                         still accepted by the API so an old bookmark does not error. --}}
+                    @unless($expPositiveScope)
                     <div class="db-field">
                         <label>&nbsp;</label>
                         <label class="d-inline-flex align-items-center gap-1" style="font-size: var(--db-text-sm); text-transform: none; letter-spacing: normal;">
                             <input type="checkbox" name="expiring_shownontech" value="1" {{ $expiringShowNonTech ? 'checked' : '' }}> Include non-tech
                         </label>
                     </div>
+                    @endunless
                     <button type="submit" class="db-btn db-btn-primary db-btn-sm"><i class="bi bi-funnel"></i> Apply</button>
                     @if($expFiltered || $expiringSort !== 'date')
                         <a href="{{ url()->current() }}?{{ http_build_query(request()->except($expCtl)) }}#expiring-contracts" class="db-btn db-btn-ghost db-btn-sm">Reset</a>
                     @endif
                 </form>
+
+                {{-- Scoped by a deep link from the (unlisted) Licenses page. Shown as a
+                     clearable chip because it is NOT one of the form controls above, so
+                     without this the queue would silently be showing a subset. --}}
+                @if($expiringProduct !== '')
+                    <div class="mb-3" style="font-size: var(--db-text-sm);">
+                        <span class="db-badge db-badge-info">
+                            <i class="bi bi-key"></i> Product: {{ $expiringProduct }}
+                            <a href="{{ url()->current() }}?{{ http_build_query(array_merge(request()->except(['expiring_product','expiring_page']), [])) }}#expiring-contracts"
+                               style="margin-left: 6px;" title="Remove this filter">&times;</a>
+                        </span>
+                    </div>
+                @endif
             </div>
 
             <div class="table-responsive">
@@ -252,7 +331,22 @@
                     </thead>
                     <tbody>
                         @forelse(($expiring['contracts'] ?? []) as $i => $c)
-                        @php $d = $c['days_to_expiry'] ?? null; @endphp
+                        @php
+                            $d = $c['days_to_expiry'] ?? null;
+                            // A licence row links to its product family page, where the
+                            // curated reasoning, the class, the rate card and any
+                            // open-source candidates live. Empty slug (no family table, or a
+                            // generic "Various" family) means no link rather than a dead one.
+                            $famSlug = $c['license_family_slug'] ?? '';
+                            $famUrl  = $famSlug !== ''
+                                ? route('research.digital-reform.license-family', ['slug' => $famSlug])
+                                : null;
+                            $pClass  = $c['purchase_class'] ?? '';
+                            // The Licenses page hides the build-vs-buy rating outside
+                            // software-licence, because asking "could we build this?" of hosting
+                            // is what made $6.8M of AWS invisible. Same rule here.
+                            $showBvb = ($c['build_vs_buy'] ?? '') !== '' && ($pClass === '' || $pClass === 'software-licence');
+                        @endphp
                         <tr>
                             <td>
                                 <span class="rr-exp-date">{{ $c['end_date'] }}</span>
@@ -272,14 +366,27 @@
                                 @if(($c['function_category'] ?? '') || ($c['is_license'] ?? false))
                                 <div class="mt-1">
                                     @if($c['function_category'] ?? '')<span class="db-badge db-badge-neutral rr-method">{{ $c['function_category'] }}</span>@endif
-                                    @if($c['is_license'] ?? false)<span class="db-badge db-badge-info rr-method"><i class="bi bi-key"></i> License</span>@endif
+                                    @if($c['is_license'] ?? false)
+                                        @if($famUrl)
+                                            <a class="db-badge db-badge-info rr-method" href="{{ $famUrl }}" title="Full analysis of this product family"><i class="bi bi-key"></i> {{ $c['license_family'] ?: 'License' }} <i class="bi bi-arrow-right-short"></i></a>
+                                        @else
+                                            <span class="db-badge db-badge-info rr-method"><i class="bi bi-key"></i> License</span>
+                                        @endif
+                                    @endif
                                 </div>
                                 @endif
                             </td>
                             <td class="small">{{ $c['agency'] }}</td>
                             <td>
                                 ${{ number_format($c['award_amount'] ?? 0, 0) }}
-                                @if(($c['current_amount'] ?? 0) > ($c['award_amount'] ?? 0) * 1.05)
+                                @if(($c['amount_kind'] ?? 'committed') === 'ceiling')
+                                    {{-- ⚠ A master agreement's figure is headroom agencies
+                                         may buy against, not money committed to it — it
+                                         carries no payments under its own id. Rendering it
+                                         identically to a contract is how a $50.0M vehicle
+                                         reads as $50.0M of spend about to renew. --}}
+                                    <div class="rr-grown" title="Master agreement: a ceiling agencies may buy against. Purchases are filed under their own order ids, so this figure is not spend.">ceiling, not spend</div>
+                                @elseif(($c['current_amount'] ?? 0) > ($c['award_amount'] ?? 0) * 1.05)
                                     <div class="rr-grown">now ${{ number_format($c['current_amount'], 0) }}</div>
                                 @endif
                             </td>
@@ -330,14 +437,36 @@
                                                     @if($c['industry'] ?? '')<li><span class="k">Industry</span>{{ $c['industry'] }}</li>@endif
                                                     <li><span class="k">Procurement</span>@if($c['procurement_method'] ?? ''){{ $c['procurement_method'] }}@else&mdash;@endif</li>
                                                     @if($c['function_category'] ?? '')<li><span class="k">Category</span>{{ $c['function_category'] }}</li>@endif
-                                                    @if($c['is_license'] ?? false)<li><span class="k">License</span>{{ $c['license_product'] ?: 'Software license' }}@if($c['license_purpose'] ?? '') &mdash; {{ $c['license_purpose'] }}@endif</li>@endif
+                                                    @if($c['is_license'] ?? false)
+                                                    <li><span class="k">License</span>{{ $c['license_product'] ?: 'Software license' }}@if($c['license_purpose'] ?? '') &mdash; {{ $c['license_purpose'] }}@endif</li>
+                                                    @if($famUrl)<li><span class="k">Product family</span><a href="{{ $famUrl }}">{{ $c['license_family'] }} &mdash; full analysis</a></li>@endif
+                                                    @endif
+                                                    @if($pClass !== '')
+                                                    <li><span class="k">Purchase class</span>{{ str_replace('-', ' ', $pClass) }}
+                                                        @if($c['purchase_class_lever'] ?? '') &middot; <span class="k">lever</span>{{ str_replace('-', ' ', $c['purchase_class_lever']) }}@endif
+                                                        @if(($c['purchase_class_tier'] ?? '') === 'curated')<span class="db-badge db-badge-neutral rr-method">reviewed</span>@endif
+                                                    </li>
+                                                    @endif
                                                 </ul>
 
-                                                @if($c['build_vs_buy'] ?? '')
+                                                {{-- ⚠ Shown ONLY where the substitution question is the right one. For
+                                                     hosting, cloud, support tiers and content the rating answers "no" and
+                                                     ends the conversation, which is exactly how $6.8M of AWS stayed
+                                                     invisible on the Licenses page. Those rows get their class's lever as
+                                                     a review flag instead. --}}
+                                                @if($showBvb)
                                                 <h6 class="mt-3">Build-vs-buy assessment <span class="text-muted" style="text-transform:none;font-weight:normal;">(AI &mdash; verify)</span></h6>
                                                 <p style="font-size: var(--db-text-sm); margin:0;">
                                                     <span class="db-badge {{ $c['build_vs_buy'] === 'high' ? 'db-badge-info' : ($c['build_vs_buy'] === 'medium' ? 'db-badge-warning' : 'db-badge-neutral') }}">{{ ucfirst($c['build_vs_buy']) }} replaceability</span>
                                                     @if($c['ai_rationale'] ?? '') <span class="text-muted">{{ $c['ai_rationale'] }}</span>@endif
+                                                </p>
+                                                @elseif(($c['build_vs_buy'] ?? '') !== '')
+                                                <h6 class="mt-3">Why no build-vs-buy rating</h6>
+                                                <p style="font-size: var(--db-text-sm); margin:0;" class="text-muted">
+                                                    This is a {{ str_replace('-', ' ', $pClass) }} purchase, so
+                                                    &ldquo;could the city build this instead?&rdquo; is the wrong question and its
+                                                    answer would hide the money rather than surface it. The lever here is
+                                                    <strong>{{ str_replace('-', ' ', $c['purchase_class_lever'] ?? 'unclassified') }}</strong>.
                                                 </p>
                                                 @endif
                                             </div>
@@ -391,6 +520,20 @@
                     and function categories come from an AI pass (Gemini) over each contract's title and program;
                     &ldquo;no open solicitation&rdquo; is a live City Record join on the contract PIN; utilization is actual
                     Checkbook spend over recent fiscal years. Verify before acting.
+                </p>
+                <p class="mb-0 mt-2">
+                    The build-your-own flag is <strong>gated by what kind of purchase a contract is</strong>: a
+                    hosting, cloud, support-tier or content subscription gets its own lever &mdash; a published-price
+                    benchmark, a paid-tier review &mdash; because &ldquo;could the city build this?&rdquo; answers
+                    &ldquo;no&rdquo; for infrastructure and ends the conversation. Purchase classes are resolved at
+                    product grain from the same source the
+                    <a href="{{ route('research.digital-reform.licenses') }}">Software Licenses</a> analysis uses, so
+                    the two pages cannot disagree about a contract.
+                    @if($expPositiveScope)
+                    Both pages also count expiring licences from one definition
+                    @if($expScope['horizon'] ?? '')(ends before {{ $expScope['horizon'] }})@endif, checked against
+                    each other.
+                    @endif
                 </p>
             </div>
         </div>

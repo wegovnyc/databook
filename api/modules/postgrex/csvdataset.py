@@ -145,11 +145,18 @@ class CsvDataset:
         self.fn = '{}/{}'.format(self.datadir, fn)
         
     def delete(self, tbl):
+        # ⚠ `tbl` reaches DROP TABLE. The old body was
+        #     self.db.q("DROP TABLE {}".format(tbl))
+        # — a raw-interpolation SQL-injection sink — inside a bare
+        # `except Exception: pass`, so a failed OR malicious call still returned
+        # success. Now: the name must be a plain identifier that ACTUALLY
+        # EXISTS, it is quoted, and errors are no longer swallowed.
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', tbl or ''):
+            return False
+        if tbl not in self.db.tables():
+            return False
         self.set_fn(tbl)
-        try:
-            self.db.q("DROP TABLE {}".format(tbl))
-        except Exception:
-            pass
+        self.db.q('DROP TABLE "{}"'.format(tbl))
         return self.delete_file()
         
         

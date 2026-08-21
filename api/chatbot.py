@@ -12,6 +12,7 @@ from google.genai import types
 
 # Import database module (use the shared connection pool)
 from postgrex import PostgresModelAsync
+from modules.errfmt import exc_str
 
 # Gemini client (initialized lazily)
 _client = None
@@ -46,7 +47,7 @@ async def _query(sql: str, *args):
         result = await PostgresModelAsync.select(sql, args if args else None)
         return result.get("rows", [])
     except Exception as e:
-        print(f"Database query error: {e}")
+        print(f"Database query error: {exc_str(e)}")
         return []
 
 

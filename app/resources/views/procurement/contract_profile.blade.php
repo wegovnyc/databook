@@ -317,6 +317,78 @@
 
                 @include('procurement.partials.related_notices')
 
+                {{-- Other contracts worth seeing from here. Two kinds, kept apart. --}}
+                @php
+                    $rcSame = $relatedContracts['same_vendor'] ?? [];
+                    $rcCoterm = $relatedContracts['co_terminating'] ?? [];
+                    $rcCap = $relatedContracts['coterm_max_group'] ?? 10;
+                    // Precomputed: a Blade directive glued to a word character is
+                    // not compiled, and these are echoed escaped.
+                    $rcMoney = function ($v) {
+                        $v = (float) $v;
+                        if ($v >= 1000000) return '$' . number_format($v / 1000000, 1) . 'M';
+                        if ($v >= 1000) return '$' . number_format($v / 1000, 0) . 'K';
+                        return '$' . number_format($v, 0);
+                    };
+                @endphp
+                @if(count($rcSame) || count($rcCoterm))
+                <div id="related-contracts" class="db-anchor mb-5">
+                    <div class="d-flex align-items-center mb-3" style="gap: var(--db-space-15);">
+                        <h4 class="mb-0">Related Contracts</h4>
+                        <span class="db-badge db-badge-neutral">{{ count($rcSame) + count($rcCoterm) }}</span>
+                    </div>
+
+                    @if(count($rcSame))
+                    <h5 class="mb-1">Same vendor, same agency</h5>
+                    <p class="text-muted small mb-2">Other contracts this vendor holds
+                        at this agency. Showing up to 25.</p>
+                    <div class="db-table-wrap"><div class="table-responsive">
+                    <table class="db-table">
+                        <thead><tr><th>Contract</th><th>Title</th><th class="text-end">Value</th><th>Ends</th></tr></thead>
+                        <tbody>
+                        @foreach($rcSame as $r)
+                            <tr>
+                                <td><a href="/procurement/contract/{{ $r['ctr_id'] }}">{{ $r['contract_id'] ?: $r['ctr_id'] }}</a></td>
+                                <td>{{ \Illuminate\Support\Str::limit($r['contract_title'] ?? '', 60) }}</td>
+                                <td class="text-end">{{ $rcMoney($r['current_amount'] ?? $r['award_amount'] ?? 0) }}</td>
+                                <td>{{ $r['end_date'] ?? '' }}</td>
+                            </tr>
+                        @endforeach
+                        </tbody>
+                    </table>
+                    </div></div>
+                    @endif
+
+                    @if(count($rcCoterm))
+                    <h5 class="mb-1 mt-4">Ending the same day, same agency</h5>
+                    <p class="text-muted small mb-2">
+                            <strong>Ends the same day, at the same agency.</strong>
+                            Contracts that expire together are often one program — but
+                            <strong>a shared end date is not evidence that they are</strong>.
+                            Treat this as a prompt to look, not as a finding.
+                            Shown only for groups of {{ $rcCap }} or fewer, and never for
+                            30 June, the City fiscal-year boundary where hundreds of
+                        unrelated contracts expire together.
+                    </p>
+                    <div class="db-table-wrap"><div class="table-responsive">
+                    <table class="db-table">
+                        <thead><tr><th>Contract</th><th>Vendor</th><th>Title</th><th class="text-end">Value</th></tr></thead>
+                        <tbody>
+                        @foreach($rcCoterm as $r)
+                            <tr>
+                                <td><a href="/procurement/contract/{{ $r['ctr_id'] }}">{{ $r['contract_id'] ?: $r['ctr_id'] }}</a></td>
+                                <td>{{ \Illuminate\Support\Str::limit($r['vendor_name'] ?? '', 28) }}</td>
+                                <td>{{ \Illuminate\Support\Str::limit($r['contract_title'] ?? '', 48) }}</td>
+                                <td class="text-end">{{ $rcMoney($r['current_amount'] ?? $r['award_amount'] ?? 0) }}</td>
+                            </tr>
+                        @endforeach
+                        </tbody>
+                    </table>
+                    </div></div>
+                    @endif
+                </div>
+                @endif
+
             </div>
         </div>
 

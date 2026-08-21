@@ -12,6 +12,7 @@ import asyncio
 import csv
 import json
 import io
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -21,12 +22,33 @@ import aiohttp
 import asyncpg
 
 from config import Config
+
+# ⚠ getLogger ONLY — never basicConfig here. modules/applog.py owns the api's
+# logging configuration, and a second config in a module the api imports would
+# double every line in prod (#249). This module is not under `routers.*` or
+# `modules.*`, so it inherits root at WARNING: logger.warning and logger.error
+# are emitted (and .error becomes a Sentry event via LoggingIntegration's
+# EventHandler), while logger.info would be dropped — so nothing here uses info.
+logger = logging.getLogger(__name__)
 from generate_dashboard import generate as generate_titles_dashboard
 
 try:
     import orgfilter
 except ImportError:
     from modules import orgfilter
+# ⚠ ONE owner for the GIN/global-search declarations, shared with main.py's
+# /import-csv path — see the module docstring for why two copies existed and what
+# that cost.
+# ⚠⚠ THE SAME try/except AS orgfilter ABOVE, AND IT IS LOAD-BEARING, NOT STYLE.
+# `conftest.py` replaces the whole `modules` package with a MagicMock, whose
+# `tables()` returns a mock that `sorted()` reads as EMPTY — so `from modules
+# import searchindexes` alone made the hook-registration loop below register
+# NOTHING under test, silently. Two guards caught it; the direct import keeps the
+# real module in both environments.
+try:
+    import searchindexes
+except ImportError:
+    from modules import searchindexes
 from enrich_geo_json import enrich_geo_json_hook
 from enrich_fire_data import (
     enrich_fire_causes_hook,
@@ -38,6 +60,8 @@ from enrich_agency import derive_agency_enrichment_hook
 from enrich_vendor import derive_vendor_enrichment_hook
 from enrich_doing_business import derive_doing_business_hook
 from build_org_vendor_crosswalk import derive_org_vendor_hook
+from build_notice_product_links import derive_notice_product_links_hook
+from modules.errfmt import exc_str
 
 # Credential resolution lives in one place — see modules/dbcreds.py.
 try:
@@ -99,6 +123,75 @@ SOCRATA_RESOURCE_URL = f"{SOCRATA_BASE}/resource/{{socrata_id}}.csv"
 
 # Run cycle: 24 hours
 SCHEDULER_INTERVAL_SECONDS = 86400
+# ⚠ A CYCLE THAT DIES OUTRIGHT USED TO COST A FULL DAY. Every dataset inside
+# `run_data_check` is already individually guarded, so the only way to reach the
+# loop's own handler is a failure OUTSIDE those guards — in practice the
+# `get_db_connection()` at the top of the cycle. Measured on prod 2026-08-18: an
+# asyncpg connect TimeoutError under crawler-induced executor starvation (DuckDB
+# Parquet scans share the default executor with getaddrinfo) killed the cycle
+# before a single dataset was polled, and the loop then slept 86400s. That is a
+# routine trigger — ~190 such timeouts per 24h are documented — so a short retry
+# is worth far more than it costs.
+#
+# Deliberately NOT classifying transient-vs-permanent: that judgement is the trap
+# (cf. api_exec deciding infra-vs-logic by probing health). A genuine logic error
+# simply fails every attempt and costs SCHEDULER_MAX_RETRIES * the delay before
+# alerting — a few minutes — which is a price worth paying to avoid guessing.
+SCHEDULER_RETRY_DELAY_SECONDS = 120
+SCHEDULER_MAX_RETRIES = 3
+
+
+# =============================================================================
+# Dead-man's switch for the scheduler loop
+# =============================================================================
+# ⚠⚠ WHAT A GREEN CHECK HERE DOES AND DOES NOT MEAN. It means the LOOP RAN a
+# cycle to completion. It does NOT mean the data is fresh: individual datasets are
+# guarded inside `run_data_check`, so a cycle can complete with several of them
+# failing and still ping success. Dataset freshness is `scripts/dataset-staleness.sh`
+# (daily) and `dataset_registry.last_error`. Conflating the two would be a green
+# monitor that means less than it looks like — the permanently-red monitor's
+# cousin, and the more dangerous of the pair.
+#
+# This exists because NOTHING watched this loop. All 8 healthchecks checks watch
+# HOST crons; this runs inside the api process, and the failure line was a bare
+# `print` invisible to Sentry. On 2026-08-18 the loop died at 14:15 and the only
+# thing that would ever have noticed was dataset-staleness.sh, up to 5 days later
+# and only if a source moved.
+#
+# ⚠ Read from the environment AT PING TIME, not at import: the value arrives from
+# the box's gitignored `.env` via compose, so it is baked at container CREATE.
+# Changing it needs a recreate, not a restart — the documented trap.
+_HC_ENV_VAR = "HC_URL_API_SCHEDULER"
+
+
+async def _hc_ping(kind: str, body: str = "") -> None:
+    """Ping the healthchecks.io check for this loop. No-op when unconfigured.
+
+    ⚠ NO-OP WHEN UNSET IS LOAD-BEARING, and it is what makes the rollout safe:
+    the code ships first and does nothing, then the check is created, then the env
+    var is set. Creating a check before anything can ping it manufactures a red
+    monitor on its first missed schedule — that is why the DOS crosswalk check and
+    its `hc_ping` had to ship together.
+
+    ⚠ Never raises. A monitoring call that can break the thing it monitors is
+    worse than no monitoring.
+    """
+    url = (os.environ.get(_HC_ENV_VAR) or "").strip()
+    if not url:
+        return
+    if kind == "start":
+        url = f"{url}/start"
+    elif kind == "fail":
+        url = f"{url}/fail"
+    try:
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # healthchecks RETAINS the body, so the alert email carries the
+            # reason instead of just "went down".
+            await session.post(url, data=(body or "")[:10000])
+    except Exception as exc:  # noqa: BLE001 — monitoring must never be fatal
+        logger.warning("[scheduler] healthchecks ping (%s) failed: %s",
+                       kind, exc_str(exc))
 
 # Normalizer API (Python/FastAPI on Lightsail)
 NORMALIZER_BASE_URL = os.environ.get(
@@ -145,17 +238,102 @@ POST_INGEST_HOOKS = {
     # changes — which also picks up register changes within a day.
     "vendors": [derive_vendor_enrichment_hook, derive_doing_business_hook,
                 derive_org_vendor_hook],
+    # Which City Record notices name a product the City licenses, for the panel
+    # on each licence family page. Matched against the notice BODY via
+    # idx_crol_body_fts, so it belongs to the table that carries that index.
+    #
+    # ⚠ REGISTERED HERE SO IT LANDS *AFTER* THE INDEX HOOK, and that is
+    # load-bearing rather than tidy. The loop below does `insert(0, ...)` for the
+    # index lambda on every table in TABLE_INDEXES | searchindexes.tables(), and
+    # `crol` is in both — so naming it here leaves the order [indexes, this].
+    # Reversed, the 774 product probes become 774 sequential scans of a 464 MB
+    # heap instead of 774 bitmap index scans (2.4s measured, with the index).
+    #
+    # ⚠ crol reloads on SOURCE CHANGE, not daily — observed lagging up to five
+    # days (2026-08-06 -> 08-10). The links are therefore as fresh as the last
+    # crol ingest, which `notice_product_links.built_at` records.
+    "crol": [derive_notice_product_links_hook],
 }
 
 
 # Performance indexes that must be recreated after pipeline drops/recreates tables.
 # Map of table_name -> list of (index_name, column_expression) tuples.
 TABLE_INDEXES = {
-    "civillist": [("idx_civillist_wegov_org_id", '"wegov-org-id"')],
-    "crol": [("idx_crol_wegov_org_id", '"wegov-org-id"')],
+    # ⚠⚠ THESE NAMES LOOK OFF-CONVENTION ON PURPOSE. `civillist`, `payrolldata` and
+    # `civillistactive` were indexed by a SECOND mechanism — CREATE INDEX statements
+    # inside `main.py::ensure_people_indexes()`, run at api STARTUP — under different
+    # names from the ones declared here. Measured 2026-08-13: the startup names were
+    # the ones that existed on prod (`idx_civillist_orgid` 97MB / 2,803 scans,
+    # `idx_payrolldata_orgid` 204MB) and the declared `*_wegov_org_id` names existed
+    # nowhere. Adopting the LIVE names costs nothing; renaming would have meant
+    # building ~300MB of duplicate index and dropping the originals for tidiness.
+    # ⚠ And it was not merely redundant. Startup is a WEAK mechanism for a
+    # pipeline-loaded table: /import-csv drops the table on every ingest and restores
+    # only the GIN half, so these B-trees were absent from each ingest until the next
+    # api restart — `idx_civillist_titlecode`, the most-used index on that table
+    # (6,528 scans), was declared NOWHERE ELSE. Declared here, the post-ingest hook
+    # restores them immediately.
+    "civillist": [("idx_civillist_orgid", '"wegov-org-id"'),
+                  ("idx_civillist_titlecode", '"TITLE CODE"')],
+    "civillistactive": [("idx_civillistactive_orgid", '"wegov-org-id"')],
+    # ⚠⚠ CORRECTED 2026-08-13: this comment used to say `crol` KEEPS its indexes
+    # across the daily ingest, so the entries below were "durability insurance
+    # rather than because the ingest destroys them". **That is wrong, and the
+    # declaration is the only thing that saves them.** `main.py::import_crol_async`
+    # does `DROP TABLE IF EXISTS crol` + CREATE on every import (crol is routed
+    # away from the generic /import-csv path), then recreates four indexes from its
+    # own inline list. Anything outside that list dies daily — which is exactly
+    # what happened: `idx_crol_pin` / `idx_crol_pin10` were created by hand on
+    # 2026-08-11 and were ALREADY GONE by 08-13, destroyed by the 16:18 ingest.
+    # Measured, not inferred: pg_class oids show the importer's four created
+    # together, the search-index pair next, and these two only when the hook was
+    # run. They survive now because the scheduler calls run_post_ingest_hooks()
+    # after the import and this list is what that hook applies.
+    # The absence made the related-notices lookup on /oce/contract/{id} a seq scan
+    # over all 1.1M rows: 106.8ms and 59,388 buffers, against 0.102ms and 9
+    # once indexed (Sentry DATABOOK-API-16).
+    "crol": [
+        ("idx_crol_wegov_org_id", '"wegov-org-id"'),
+        # ⚠ These four were created INLINE by main.py::import_crol_async — and by a
+        # verbatim SECOND copy of the same block in import_csv_async. Three
+        # declaration sites for one table, with `idx_crol_wegov_org_id` in two of
+        # them. Declared here so the importer can call the shared hook instead.
+        ("idx_crol_start_date", "start_date_parsed"),
+        ("idx_crol_event_date", "event_date_parsed", "event_date_parsed IS NOT NULL"),
+        ("idx_crol_section", '"SectionName"'),
+        # oce.py related_notices — `WHERE trim("PIN") = ANY($1)`.
+        ("idx_crol_pin", 'trim("PIN")'),
+        # The notice<->solicitation prefix join: the 10-char EPIN prefixes the PIN.
+        ("idx_crol_pin10", 'left(trim("PIN"), 10)'),
+    ],
     "expensebudgetonnycopendata": [("idx_expensebudget_wegov_org_id", '"wegov-org-id"')],
     "capitalprojectsmilestones": [("idx_capitalprojectsmilestones_wegov_org_id", '"wegov-org-id"')],
-    "payrolldata": [("idx_payrolldata_wegov_org_id", '"wegov-org-id"')],
+    # Live name, per the note at the top of this map.
+    "payrolldata": [("idx_payrolldata_orgid", '"wegov-org-id"')],
+    # The three PASSPort tables had ZERO indexes — measured on prod 2026-08-04,
+    # `pg_indexes` returned no rows for any of them, so every point lookup on
+    # the procurement pages was a sequential scan. `SELECT * FROM contracts
+    # WHERE ctr_id = $1` (the first thing /oce/contract/{id} does) planned as
+    # `Seq Scan ... Rows Removed by Filter: 55805`, 10.7ms warm / 2,477 shared
+    # buffers, and the handler runs a second one against contract_id whenever
+    # the first misses. Each index below backs a measured equality predicate:
+    "contracts": [
+        # /oce/contract/{id} — primary lookup, then the contract_id fallback.
+        ("idx_contracts_ctr_id", "ctr_id"),
+        ("idx_contracts_contract_id", "contract_id"),
+        # /oce/solicitation/{epin} resulting-contracts, and the notice<->procurement
+        # crosswalk in main.py, which runs `LEFT JOIN LATERAL (SELECT ctr_id FROM
+        # contracts WHERE epin = trim(c."PIN") LIMIT 1)` once PER crol ROW for a
+        # whole year — the largest single win here.
+        ("idx_contracts_epin", "epin"),
+        # Vendor profile contract list (oce.get_vendor, mcp get_vendor_profile).
+        ("idx_contracts_vendor_name", "vendor_name"),
+    ],
+    "vendors": [
+        ("idx_vendors_supplier_id", '"PASSPort Supplier-ID"'),
+        ("idx_vendors_vendor_name", '"Vendor Name"'),
+    ],
+    "solicitations": [("idx_solicitations_epin", '"EPIN"')],
 }
 
 
@@ -165,26 +343,75 @@ async def recreate_table_indexes(conn: asyncpg.Connection, table_name: str):
     Why: The data pipeline does DROP TABLE + CREATE TABLE on every import,
     which destroys manually-created indexes. This hook ensures critical
     indexes (e.g. wegov-org-id for org profile queries) survive data updates.
+
+    ⚠ The extractor path is DROP + RENAME, not TRUNCATE: rows are COPYed into
+    `_staging_<table>`, the real table is dropped and the staging one renamed
+    over it. The staging table carries no indexes, so the renamed table has
+    none either — which is why a hand-run CREATE INDEX cannot survive here and
+    this hook is the only durable place to declare one.
     """
     indexes = TABLE_INDEXES.get(table_name, [])
-    if not indexes:
+    search = searchindexes.for_table(table_name)
+    if not indexes and not search:
         return
-    for idx_name, col_expr in indexes:
+    created = 0
+    for entry in indexes:
+        # ⚠ A third element is an optional PARTIAL-index predicate. crol's
+        # event-date index is `WHERE event_date_parsed IS NOT NULL` (16K of 1.1M
+        # rows carry a date), and without this the declaration could not express it
+        # — which is why that one lived inline in the importer instead.
+        idx_name, col_expr = entry[0], entry[1]
+        where = f' WHERE {entry[2]}' if len(entry) > 2 else ''
         try:
             await conn.execute(
-                f'CREATE INDEX IF NOT EXISTS {idx_name} ON "{table_name}"({col_expr})'
+                f'CREATE INDEX IF NOT EXISTS {idx_name} ON "{table_name}"({col_expr}){where}'
             )
-            print(f"[indexes] ✓ Created {idx_name} on {table_name}")
+            created += 1
+            # ⚠ "ensured", not "Created": CREATE INDEX IF NOT EXISTS succeeds as a
+            # no-op, so this line said "Created" for indexes that already existed —
+            # which reads as evidence of work that did not happen. It matters now
+            # that the log is actually readable (#249).
+            print(f"[indexes] ✓ ensured {idx_name} on {table_name}")
         except Exception as e:
-            print(f"[indexes] ✗ Failed to create {idx_name} on {table_name}: {e}")
+            print(f"[indexes] ✗ Failed to create {idx_name} on {table_name}: {exc_str(e)}")
+    # ⚠ THE GIN HALF, and it had no durable home at all until now. TABLE_INDEXES
+    # renders `CREATE INDEX ... ON tbl(expr)`, which cannot express
+    # `USING gin (col gin_trgm_ops)`, so the global-search indexes were declared in
+    # main.py and applied ONLY by /import-csv — a path `contracts` and
+    # `solicitations` never take. Measured 2026-08-13: 5 of the 19 were missing on
+    # prod, all 5 on those two tables, and contract search was a seq scan of 55,806
+    # rows on every keystroke-completed query. Same module now serves both callers.
+    if search:
+        created += await searchindexes.ensure(
+            conn, table_name,
+            log=lambda m: print(f"[indexes] {m}"))
+    # A freshly renamed table has no statistics until autovacuum gets to it, and
+    # the planner will ignore a brand-new index while it thinks the table is
+    # empty. ANALYZE makes the index take effect on the next query rather than
+    # whenever autovacuum happens to run — otherwise this hook can report
+    # success while every lookup still seq-scans.
+    if created:
+        try:
+            await conn.execute(f'ANALYZE "{table_name}"')
+            print(f"[indexes] ✓ ANALYZE {table_name}")
+        except Exception as e:
+            print(f"[indexes] ✗ ANALYZE {table_name} failed: {exc_str(e)}")
 
 
-# Register index recreation as post-ingest hooks for affected tables
-for _tbl in TABLE_INDEXES:
+# Register index recreation as post-ingest hooks for affected tables.
+# Inserted at position 0, not appended: `vendors` already carries three
+# enrichment hooks that themselves query the table by name (vendor sub-tables,
+# Doing Business, org<->vendor crosswalk), so rebuilding the indexes first
+# means those hooks run against an indexed table instead of seq-scanning it.
+# ⚠ THE UNION of both index families, not just TABLE_INDEXES. Registering only the
+# btree tables is what left `contracts` and `solicitations` — which carry search
+# indexes and nothing else — with no hook to restore their GIN indexes after the
+# extractor dropped their tables.
+for _tbl in sorted(set(TABLE_INDEXES) | searchindexes.tables()):
     if _tbl not in POST_INGEST_HOOKS:
         POST_INGEST_HOOKS[_tbl] = []
-    POST_INGEST_HOOKS[_tbl].append(
-        lambda conn, t=_tbl: recreate_table_indexes(conn, t)
+    POST_INGEST_HOOKS[_tbl].insert(
+        0, lambda conn, t=_tbl: recreate_table_indexes(conn, t)
     )
 
 
@@ -205,7 +432,7 @@ async def run_post_ingest_hooks(table_name: str,
             await hook_fn(conn)
             print(f"[hooks] ✓ {hook_fn.__module__}.{hook_fn.__name__}")
         except Exception as e:
-            print(f"[hooks] ✗ {hook_fn.__module__}.{hook_fn.__name__}: {e}")
+            print(f"[hooks] ✗ {hook_fn.__module__}.{hook_fn.__name__}: {exc_str(e)}")
 
 
 
@@ -257,7 +484,7 @@ async def log_ingestion(conn: asyncpg.Connection, table_name: str,
             VALUES ($1, $2, $3, $4, $5)
         """, table_name, s3_url or '', status, row_count, error_message)
     except Exception as e:
-        print(f"[scheduler] Failed to log ingestion for {table_name}: {e}")
+        print(f"[scheduler] Failed to log ingestion for {table_name}: {exc_str(e)}")
 
 
 # =============================================================================
@@ -297,7 +524,7 @@ async def check_socrata_metadata(socrata_id: str,
                     ts.replace('Z', '+00:00')
                 )
     except Exception as e:
-        print(f"[scheduler] Socrata meta {socrata_id} error: {e}")
+        print(f"[scheduler] Socrata meta {socrata_id} error: {exc_str(e)}")
     return None
 
 
@@ -613,7 +840,7 @@ async def post_normalize(conn: asyncpg.Connection, table_name: str,
         print(f"[post_normalize] {table_name}: backfilled entity mappings")
 
     except Exception as e:
-        print(f"[post_normalize] {table_name}: error — {e}")
+        print(f"[post_normalize] {table_name}: error — {exc_str(e)}")
 
 
 async def post_parse_dates(conn: asyncpg.Connection, table_name: str):
@@ -661,7 +888,7 @@ async def post_parse_dates(conn: asyncpg.Connection, table_name: str):
             """)
 
     except Exception as e:
-        print(f"[post_parse_dates] {table_name}: error — {e}")
+        print(f"[post_parse_dates] {table_name}: error — {exc_str(e)}")
 
 
 async def needs_full_refresh(conn: asyncpg.Connection, ds: dict) -> bool:
@@ -728,7 +955,7 @@ async def scan_unmapped_entities(conn: asyncpg.Connection,
               AND TRIM("{entity_col}") != ''
         """)
     except Exception as e:
-        print(f"[scanner] Query failed for {table_name}: {e}")
+        print(f"[scanner] Query failed for {table_name}: {exc_str(e)}")
         return []
 
     new_unmapped = []
@@ -813,7 +1040,7 @@ async def send_unmapped_alert(table_name: str, entity_col: str,
         # log. Fall back to Sentry, which IS wired, so the finding still lands
         # somewhere a human looks. The rows are in unmapped_entities regardless,
         # and /pipeline/unmapped + the admin Data Health page read them.
-        print(f"[alert] Failed to send alert email: {e}")
+        print(f"[alert] Failed to send alert email: {exc_str(e)}")
         try:
             import sentry_sdk
             sentry_sdk.capture_message(
@@ -862,7 +1089,7 @@ async def send_staleness_alert(stale_datasets: list[dict]):
         )
         print(f"[alert] Staleness alert sent for {len(stale_datasets)} datasets")
     except Exception as e:
-        print(f"[alert] Failed to send staleness alert: {e}")
+        print(f"[alert] Failed to send staleness alert: {exc_str(e)}")
 
 
 # =============================================================================
@@ -1127,7 +1354,7 @@ async def _safe_val(conn, query, default=0):
         val = await conn.fetchval(query)
         return val if val is not None else default
     except Exception as e:
-        print(f"[stats] Query failed: {e}", flush=True)
+        print(f"[stats] Query failed: {exc_str(e)}", flush=True)
         return default
 
 
@@ -1401,7 +1628,7 @@ async def rebuild_glob_stats(conn: asyncpg.Connection):
 
 
     except Exception as e:
-        print(f"[stats] Failed to rebuild stats: {e}")
+        print(f"[stats] Failed to rebuild stats: {exc_str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -1464,7 +1691,7 @@ async def run_data_check(conn: asyncpg.Connection = None):
                         print(f"[scheduler] Skipping {table_name} "
                               f"(source_type={source_type})")
                 except Exception as e:
-                    print(f"[scheduler] Error processing {table_name}: {e}")
+                    print(f"[scheduler] Error processing {table_name}: {exc_str(e)}")
                     await update_registry(conn, ds['id'],
                                           last_error=str(e),
                                           last_checked_at=datetime.now(timezone.utc))
@@ -1510,7 +1737,7 @@ async def run_data_check(conn: asyncpg.Connection = None):
                         await update_registry(
                             conn, ds['id'], last_checked_at=now)
                 except Exception as e:
-                    print(f"[scheduler] Error checking {table_name}: {e}")
+                    print(f"[scheduler] Error checking {table_name}: {exc_str(e)}")
                     await update_registry(conn, ds['id'],
                                           last_error=str(e),
                                           last_checked_at=now)
@@ -1679,7 +1906,7 @@ async def _run_unmapped_scan(conn):
                 )
         except Exception as e:
             # One bad table must not abort the sweep.
-            print(f"[unmapped-scan] {table_name}: failed — {e}")
+            print(f"[unmapped-scan] {table_name}: failed — {exc_str(e)}")
 
     print(f"[unmapped-scan] Scanned {scanned} datasets, "
           f"{total_new} new unmapped entities")
@@ -1793,7 +2020,7 @@ async def _send_completeness_alert(issues: list[dict]):
         )
         print(f"[alert] Completeness alert sent for {len(issues)} datasets")
     except Exception as e:
-        print(f"[alert] Failed to send completeness alert: {e}")
+        print(f"[alert] Failed to send completeness alert: {exc_str(e)}")
 
 
 async def process_socrata_dataset(conn: asyncpg.Connection, ds: dict,
@@ -2253,14 +2480,56 @@ async def scheduler_loop():
     await asyncio.sleep(60)  # Initial delay to let API fully boot
 
     while True:
-        try:
-            print(f"[scheduler] Starting daily data check at "
-                  f"{datetime.now(timezone.utc).isoformat()}")
-            await run_data_check()
-        except Exception as e:
-            print(f"[scheduler] Fatal error in scheduler loop: {e}")
-            import traceback
-            traceback.print_exc()
+        # Retry a cycle that died outright, before falling back to the daily
+        # interval. See SCHEDULER_RETRY_DELAY_SECONDS for why this exists and why
+        # it does not try to tell a transient failure from a permanent one.
+        completed = False
+        last_error = ""
+        for attempt in range(1, SCHEDULER_MAX_RETRIES + 2):
+            try:
+                await _hc_ping("start")
+                print(f"[scheduler] Starting daily data check at "
+                      f"{datetime.now(timezone.utc).isoformat()}"
+                      + (f" (attempt {attempt})" if attempt > 1 else ""))
+                await run_data_check()
+                completed = True
+                break
+            except Exception as e:  # noqa: BLE001 — the loop must never die
+                import traceback
+                if attempt > SCHEDULER_MAX_RETRIES:
+                    # ⚠⚠ ERROR, NOT print — THIS IS THE ALERTING FIX. The old
+                    # line here was a bare `print`, so a scheduler that had died
+                    # was invisible to Sentry: LoggingIntegration raises events
+                    # from the LOGGING module at ERROR and never sees a print,
+                    # and no healthchecks check covers this loop (all 8 watch
+                    # HOST crons; this runs inside the api). The only compensating
+                    # control was dataset-staleness.sh, up to 5 days later and
+                    # only if the source moved.
+                    last_error = exc_str(e)
+                    logger.error(
+                        "[scheduler] cycle failed %d times, giving up until the "
+                        "next interval: %s", attempt, last_error)
+                    traceback.print_exc()
+                    break
+                # WARNING while retries remain: visible in the log (#249) but not
+                # an alert, because a blip that self-heals should not page anyone.
+                logger.warning(
+                    "[scheduler] cycle failed (attempt %d/%d), retrying in %ds: %s",
+                    attempt, SCHEDULER_MAX_RETRIES + 1,
+                    SCHEDULER_RETRY_DELAY_SECONDS, exc_str(e))
+                traceback.print_exc()
+                await asyncio.sleep(SCHEDULER_RETRY_DELAY_SECONDS)
+
+        # ⚠ The ping reports whether the LOOP completed a cycle, not whether every
+        # dataset ingested — see the note on _hc_ping. It is sent outside the retry
+        # loop so exactly one success-or-fail lands per interval.
+        if completed:
+            await _hc_ping("success", "scheduler cycle completed")
+        else:
+            await _hc_ping(
+                "fail",
+                f"scheduler cycle failed {SCHEDULER_MAX_RETRIES + 1} times, "
+                f"last error: {last_error}")
 
         print(f"[scheduler] Next check in {SCHEDULER_INTERVAL_SECONDS}s")
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)

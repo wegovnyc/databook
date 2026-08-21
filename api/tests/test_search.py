@@ -93,23 +93,64 @@ async def test_short_query_returns_empty(client, mock_db, path):
     mock_db.assert_not_called()  # too-short: no DB round-trips
 
 
-# ---- durable search-index recreation (main.py) -------------------------------
+# ---- durable search-index recreation (modules/searchindexes.py) --------------
+# ⚠ THESE MOVED. They used to read `main.SEARCH_INDEXES` and call
+# `main._ensure_search_indexes`, and they failed when the declarations moved into
+# modules/searchindexes.py — correctly, because that IS the change. The list lived in
+# main.py where only /import-csv could apply it, so `contracts` and `solicitations`
+# (extractor path, DROP+RENAME) lost their indexes at every ingest: 5 of 19 were
+# missing on prod. They are repointed here rather than deleted, because what they
+# check — well-formed bodies, one table at a time, survives a failure — still matters.
+# ⚠ Loaded BY PATH: conftest replaces the `modules` package with a MagicMock, so
+# `from modules import searchindexes` inside a test yields a mock that satisfies
+# almost any assertion.
+
+
+def _searchindexes():
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(__file__), "..", "modules", "searchindexes.py")
+    spec = importlib.util.spec_from_file_location("_si_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 
 def test_search_indexes_unique_and_well_formed():
-    import main
-    names = [n for n, _, _ in main.SEARCH_INDEXES]
+    si = _searchindexes()
+    names = [n for n, _, _ in si.INDEXES]
     assert len(names) == len(set(names)), "duplicate index names"
-    for _, _, body in main.SEARCH_INDEXES:
+    for _, _, body in si.INDEXES:
         assert body.startswith("gin ("), body
-    # Every FTS index must use the exact to_tsvector('english', ...) form the
-    # search.py queries use, or the planner won't pick it up.
-    fts = [b for _, _, b in main.SEARCH_INDEXES if "to_tsvector" in b]
-    assert fts and all("to_tsvector('english'," in b for b in fts)
+    # An FTS index must use the same text-search configuration as the queries
+    # that read it, or the planner cannot use it — silently, with no error.
+    #
+    # ⚠ ONE index is deliberately `simple`, and the exception is named rather than
+    # the rule relaxed: `idx_crol_body_fts` is read by
+    # build_notice_product_links.py, which matches PRODUCT NAMES, and the english
+    # snowball stemmer collapses brand names onto ordinary stems — `Feedly` stems
+    # to 'feed' and matched 121 notices about data feeds, `Mobilize` to 'mobil'
+    # and matched 2,388 saying "mobile". Everything else here is read by
+    # routers/search.py, which searches PROSE and wants stemming.
+    #
+    # Listing the exception keeps this guard sharp: a NEW index that picks the
+    # wrong configuration still fails, which a blanket "any config" would not.
+    SIMPLE_BY_DESIGN = {"idx_crol_body_fts"}
+    fts = [(n, b) for n, _, b in si.INDEXES if "to_tsvector" in b]
+    assert fts, "no FTS indexes are declared at all"
+    for name, body in fts:
+        want = "simple" if name in SIMPLE_BY_DESIGN else "english"
+        assert f"to_tsvector('{want}'," in body, (
+            f"{name} should use the '{want}' configuration; body is {body}")
+    # And the exception must still exist — if it is renamed away, this set goes
+    # stale and silently stops guarding anything (the ALLOWED_NAME_JOINS lesson).
+    assert SIMPLE_BY_DESIGN <= {n for n, _ in fts}, \
+        f"stale entry in SIMPLE_BY_DESIGN: {SIMPLE_BY_DESIGN - {n for n, _ in fts}}"
 
 
 @pytest.mark.asyncio
 async def test_ensure_search_indexes_targets_only_its_table():
-    import main
+    si = _searchindexes()
 
     calls = []
 
@@ -117,21 +158,24 @@ async def test_ensure_search_indexes_targets_only_its_table():
         async def execute(self, sql):
             calls.append(sql)
 
-    await main._ensure_search_indexes(FakeDB(), "crol")
+    await si.ensure(FakeDB(), "crol")
     idx = [c for c in calls if "CREATE INDEX" in c]
     assert idx, "expected crol index creation"
     assert all('ON "crol"' in c for c in idx), "must only touch the given table"
     assert any("gin_trgm_ops" in c for c in idx) and any("to_tsvector" in c for c in idx)
-    # A non-searchable table creates no indexes (still ensures pg_trgm only).
+    # A non-searchable table creates no indexes — and does not even ensure pg_trgm,
+    # because it returns before touching the connection.
     calls.clear()
-    await main._ensure_search_indexes(FakeDB(), "some_random_table")
+    await si.ensure(FakeDB(), "some_random_table")
     assert not [c for c in calls if "CREATE INDEX" in c]
 
 
 @pytest.mark.asyncio
 async def test_ensure_search_indexes_survives_a_failing_index():
-    """One bad index (e.g. missing column) must not abort the import."""
-    import main
+    """One bad index (e.g. missing column) must not abort the import — but it must
+    be reported, or a missing index is invisible for months (which is what happened)."""
+    si = _searchindexes()
+    logged = []
 
     class FlakyDB:
         def __init__(self):
@@ -142,7 +186,10 @@ async def test_ensure_search_indexes_survives_a_failing_index():
             if "CREATE INDEX" in sql and self.n % 2 == 0:
                 raise Exception("boom")
 
-    await main._ensure_search_indexes(FlakyDB(), "wegov_orgs")  # must not raise
+    made = await si.ensure(FlakyDB(), "wegov_orgs", log=logged.append)  # must not raise
+    assert made < len(si.for_table("wegov_orgs")), "the failures were not counted"
+    assert logged and any("wegov_orgs" in m for m in logged), \
+        "a failing index must name itself in the log"
 
 
 @pytest.mark.asyncio

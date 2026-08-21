@@ -1,0 +1,37 @@
+product,class,lever,why
+# WHAT KIND OF PURCHASE IS THIS, at PRODUCT grain. An OVERRIDE of the family's class.
+#
+# ⚠⚠ THIS FILE EXISTS BECAUSE ONE CLASS PER FAMILY COULD NOT HOLD TWO ANSWERS.
+# A family is a merge of product spellings, so classifying the family set the lever
+# for every contract in it. Measured 2026-08-11: the Microsoft family is $643.5M
+# across 23 contracts, classed `software-licence` -- correctly, since 89.2% of it
+# ($573.8M) is the ELA. But $68.9M of it is genuine vendor support, and it was being
+# asked "is there an open-source substitute?" instead of "does this support tier earn
+# its price?". 10.7% of the family; 5.0% of all license value.
+#
+# HOW IT RESOLVES: a contract takes its PRODUCT's class if there is a row here, else
+# its FAMILY's class (api/seed/license_family_class.csv), else it is reported as
+# `(unclassified)`. So this layer is purely additive -- an absent product is not a
+# downgrade, it is the family answer, which is usually right.
+#
+# ⚠ ONLY add a row when the product's LEVER genuinely differs from its family's.
+# This is not a place to restate the family answer per spelling: `ArcGIS`,
+# `ESRI ArcGIS` and `Esri ArcGIS` are three raw spellings of one product with one
+# lever, and the family already covers them. Keys are normalised (case and
+# punctuation folded, per modules/licenseclass.norm), so ONE row covers every
+# spelling of the same product name.
+#
+# ⚠ A product named here that does not exist in `license_family.product_raw` is
+# INERT -- it matches no contract and changes nothing. The loader prints a warning
+# naming any such row, because a seed that silently applies to nothing is
+# indistinguishable from one that worked.
+#
+# Columns: product | class (one of the seven) | lever | why (required)
+#
+# --- Microsoft: the ELA is a license, the support contracts are not ------------
+# ⚠ The FAMILY stays `software-licence` (see license_family_class.csv) because the
+# ELA is 89.2% of it. These rows peel off only the parts that are a different
+# purchase. Together they move $68.9M out of the substitution question.
+Microsoft Unified Support,support-maintenance,is-the-paid-tier-needed,"$57.0M on ONE contract. Vendor support on proprietary software the City already licenses under the ELA - no open-source substitute exists for Microsoft's own support, so the substitution question is meaningless here. The real questions: is Unified Support priced as a percentage of the ELA (and therefore growing with it), what tier is actually being consumed, and could this be scoped down or bought separately from the license."
+Microsoft Premier Support,support-maintenance,is-the-paid-tier-needed,"$11.4M across 16 contracts - the most fragmented support line in the analysis. Premier Support is the predecessor of Unified Support, so 16 separate agreements alongside a $57.0M Unified Support contract is worth checking for overlap: the City may be paying twice for the same coverage during a transition."
+Microsoft Premier Services,professional-services,scope-and-rate-review,"$0.4M. Consulting and engineering time, not a license and not a support subscription - this is people, so the lever is scope and day rate."

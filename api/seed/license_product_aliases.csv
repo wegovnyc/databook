@@ -1,0 +1,29 @@
+family,catalogue_product,why
+# OUR family name -> the proprietary product key used by
+# govoss-catalog.vercel.app/by-product.json
+#
+# ⚠⚠ THIS FILE EXISTS BECAUSE A NAME MATCH MISSED $13.3M. Our largest strong
+# software match is the family "Esri ArcGIS"; the catalogue keys it as
+# "ArcGIS Desktop" / "ArcGIS Pro" / "ArcGIS Server". No normalization joins those
+# two strings -- one carries the vendor, the others carry the edition. The match
+# was missed twice (once by keyword search, once by normalized name match) before
+# anyone wrote it down here.
+#
+# The matcher tries, in order: this file -> exact normalized name -> substring
+# containment. Only this file can express a judgement; the other two are
+# mechanical. Add a row whenever you find a real product the automatic passes
+# cannot see.
+#
+# ⚠ Do NOT use this to force a match you merely hope is right. An alias asserts
+# "these two strings name the same proprietary product", nothing more -- the
+# confidence and kind still come from the catalogue.
+Esri ArcGIS,ArcGIS Desktop,"Catalogue splits by edition (Desktop/Pro/Server); we carry one family with the vendor name. ⚠ Server maps only to GeoServer at `partial` -- a desktop-seat migration and a server migration are different projects."
+Atlassian (Jira/Confluence),Jira,Our family bundles both products; Jira is the larger half and has the stronger mapping (OpenProject 21 adopters).
+Confluence and Jira,Confluence,Separately-named family - map to the wiki half so it does not duplicate the Jira mapping.
+Microsoft Office,Microsoft Office,"Exact key, listed so it is never accidentally folded into the Microsoft ELA family, which is a different purchase."
+Splunk Enterprise,Splunk,Edition suffix the catalogue does not carry.
+Citrix Virtual Apps and Desktops,Citrix Virtual Apps,Catalogue key drops "and Desktops".
+CyberArk Idaptive,CyberArk,"Two spellings of one family exist in our data (Idaptive / CyberArk and CyberArk Idaptive); both map to the same catalogue key."
+Idaptive / CyberArk,CyberArk,See above - candidate for a curated family merge in license_family_curated.csv.
+Learning Tree Advantage+,,"DELIBERATELY BLANK: instructor-led training delivery, not software. An empty target means 'do not attempt a match', which is different from 'no match found'."
+Learning Tree,,DELIBERATELY BLANK - professional services. See license_family_class.csv.

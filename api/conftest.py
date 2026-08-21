@@ -99,6 +99,35 @@ _orgcore_spec.loader.exec_module(_orgcore)
 sys.modules.setdefault("modules.orgcore", _orgcore)
 _mock_autoload.orgcore = _orgcore
 
+# modules.errfmt is NOT mocked either: pure stdlib and its real behaviour is
+# exactly what is under test. It exists because `print(f"...error: {e}")` logged
+# an EMPTY message for every timeout (str(TimeoutError()) == ''), so a MagicMock —
+# whose str() is a cheerful non-empty repr — would make the empty-message bug
+# untestable by papering over the one property that matters.
+_errfmt_spec = _ilu.spec_from_file_location(
+    "modules.errfmt", os.path.join(_api_dir, "modules", "errfmt.py")
+)
+_errfmt = _ilu.module_from_spec(_errfmt_spec)
+_errfmt_spec.loader.exec_module(_errfmt)
+sys.modules.setdefault("modules.errfmt", _errfmt)
+_mock_autoload.errfmt = _errfmt
+
+# ⚠ modules.apikey MUST NOT be mocked, and this is the strongest case of the
+# three. It is pure stdlib (secrets + logging) and it decides AUTHENTICATION: a
+# MagicMock's `.ok()` returns a truthy Mock, so every caller is authorised, and
+# `require_editor` waves through an unauthenticated request. That is not a
+# hypothetical — mocking it turned test_org_admin's
+# `test_every_write_route_is_gated` green-adjacent (400 instead of 401, i.e. past
+# auth and into validation) and made `test_a_reader_scope_may_not_edit` stop
+# raising. A stub that FAILS OPEN in an auth test is worse than no test.
+_apikey_spec = _ilu.spec_from_file_location(
+    "modules.apikey", os.path.join(_api_dir, "modules", "apikey.py")
+)
+_apikey = _ilu.module_from_spec(_apikey_spec)
+_apikey_spec.loader.exec_module(_apikey)
+sys.modules.setdefault("modules.apikey", _apikey)
+_mock_autoload.apikey = _apikey
+
 # Now import the app — all dependency chains are short-circuited.
 from main import app  # noqa: E402
 

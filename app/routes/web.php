@@ -287,6 +287,28 @@ Route::get('/procurement/renewals', 'RenewalsController@queue')->name('renewals'
 Route::get('/procurement/renewals/{contract}/story', 'RenewalsController@story')->name('renewals.story');
 Route::get('/research/digital-reform', 'ProcurementController@digitalReform')->name('research.digital-reform');
 Route::get('/research/digital-reform/expiring', 'ProcurementController@digitalReformExpiring')->name('research.digital-reform.expiring');
+// PUBLISHED 2026-08-11. Was UNLISTED (absent from the nav + noindex) from
+// 2026-08-10 while every licence judgement on it was unreviewed AI output. The
+// top 20 families -- 88.0% of the $1,370.4M -- have now been reviewed and
+// accepted, so it is in the Digital Services Analysis submenu and indexable.
+// ⚠ The middle state it left is the one to avoid repeating: noindex and out of
+// the nav, but linked from PUBLIC vendor profiles, so reachable by anyone
+// browsing vendors while reading as private to us. URL obscurity was never
+// access control here -- this site has a documented distributed crawler. If any
+// future page must actually be private, use nginx basic auth (the /admin/
+// pattern), not absence from the nav.
+// ⚠ The ~410-family tail below the top 20 is still auto-classified. What makes
+// publishing defensible is that the page says so; guard tests pin those caveats.
+Route::get('/research/digital-reform/licenses', 'ProcurementController@digitalReformLicenses')->name('research.digital-reform.licenses');
+// Per-family profile at a stable URL. The slug is assigned at build time in
+// license_family, so it survives rebuilds; constrained here so it cannot
+// swallow a future sibling route.
+// ⚠ Declared BEFORE the {slug} family route, or "function/network-security" is
+// swallowed by it. Laravel matches in declaration order.
+Route::get('/research/digital-reform/licenses/function/{cap}', 'ProcurementController@digitalReformLicenseCapability')
+    ->where('cap', '[a-z0-9-]+')->name('research.digital-reform.license-capability');
+Route::get('/research/digital-reform/licenses/{slug}', 'ProcurementController@digitalReformLicenseFamily')
+    ->where('slug', '[A-Za-z0-9-]+')->name('research.digital-reform.license-family');
 Route::get('/procurement/transactions', 'ProcurementController@transactions')->name('procurement.transactions');
 Route::get('/procurement/transactions/search', 'ProcurementController@transactionsSearch')->name('procurement.transactions.search');
 Route::get('/procurement/budget', 'BudgetRevenueController@budget')->name('procurement.budget');

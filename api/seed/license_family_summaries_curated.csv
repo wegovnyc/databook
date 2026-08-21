@@ -1,0 +1,18 @@
+family,summary,why
+# Hand-written product summaries, applied with curated=true so
+# describe_license_families.py never overwrites them.
+#
+# ⚠ VERSION-CONTROLLED ON PURPOSE. A summary written straight into the database
+# exists only on that box: it is invisible in review, lost on a fresh
+# environment, and unreproducible. Same argument as license_family_curated.csv
+# and org_vendor_curated.csv -- if a claim is going on a public page, the claim
+# should be a reviewable diff.
+#
+# ⚠ WRITE THESE FROM WHAT THE CONTRACTS SHOW, not from general knowledge of the
+# vendor. The auto-generated ones are grounded in the recorded purposes, and a
+# hand-written one that reaches beyond the evidence is worse, not better,
+# because it carries more authority.
+#
+# Use this for families the generator declined (its recorded purposes were too
+# vague) or where it got the emphasis wrong.
+Microsoft,"Citywide licensing and support for Microsoft operating systems, office software and databases, bought as one enterprise agreement plus separate support contracts.",Generator declined - the recorded purposes are only 'technical support' / 'software maintenance' / 'enterprise software licensing'. Grounded in those plus 'Enterprise productivity and OS' and 'Database management' and the ELA/Premier/Unified product names. 47% of all license value so the most-read summary on the page.

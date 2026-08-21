@@ -1,0 +1,129 @@
+# Monthly check for drift between Databook's design tokens and the shared package.
+#
+# WHY THIS EXISTS. `sarapis/wegovnyc-design-tokens` harvested its reference tier FROM
+# `app/public/css/databook-tokens.css` — which is why the package's raw values still
+# carry the `--db-*` prefix — and Databook does NOT import the package. Two files claim
+# the same values with nothing checking the claim. The unit guard
+# (api/tests/test_design_token_parity.py) covers one direction on every push, against a
+# vendored snapshot. This job covers the other: it re-fetches the package and reports
+# when the PACKAGE has moved, which no test in this repo can see.
+#
+# It deliberately does NOT commit the refreshed snapshot. Updating it is how you accept
+# a package change into Databook's parity contract, and that is a decision — the
+# repository's whole reason for having a parity check rather than a dependency is that
+# nothing about the package's release cadence should be able to change Databook without
+# a human agreeing. (The package went v0.6.0 -> v0.7.0 inside a week.)
+name: Design Token Parity
+
+on:
+  schedule:
+    - cron: '0 13 8 * *'   # 8th of the month, 13:00 UTC — a week off the public-sync job
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  parity:
+    name: Check token parity with wegovnyc-design-tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Fetch the package's current core.css
+        id: fetch
+        run: |
+          set -o pipefail
+          # Public repo, so no auth. Pin nothing: the point is to see where HEAD is.
+          curl -sSfL -o /tmp/core.css \
+            https://raw.githubusercontent.com/sarapis/wegovnyc-design-tokens/main/src/core.css
+          sha=$(curl -sSfL https://api.github.com/repos/sarapis/wegovnyc-design-tokens/commits/main \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          snap=$(grep -oE 'source commit *: *[0-9a-f]{40}' \
+                 app/resources/design-tokens/wegovnyc-core.snapshot.css | grep -oE '[0-9a-f]{40}')
+          echo "snapshot_sha=$snap" >> "$GITHUB_OUTPUT"
+          if [ "$sha" = "$snap" ]; then echo "moved=no" >> "$GITHUB_OUTPUT";
+          else echo "moved=yes" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Compare the fetched package against Databook's tokens
+        id: compare
+        run: |
+          # ⚠ Reuses the guard's own parsing and normalisation rather than
+          # reimplementing them: a check that measures a different system than the
+          # test does is worse than no check. See the module docstring.
+          python3 - <<'PY' | tee /tmp/parity.txt
+          import importlib.util, os, sys
+          spec = importlib.util.spec_from_file_location(
+              'parity', 'api/tests/test_design_token_parity.py')
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          db = m._decls(m.DATABOOK)
+          pkg = m._decls('/tmp/core.css')
+          shared = sorted(set(db) & set(pkg))
+          bad = [(k, db[k].strip(), pkg[k].strip())
+                 for k in shared if m._norm(db[k]) != m._norm(pkg[k])]
+          pkg_only = sorted(k for k in pkg if k.startswith('--db-') and k not in db)
+          db_only = sorted(k for k in db if k.startswith('--db-') and k not in pkg)
+          print(f"shared reference tokens: {len(shared)}")
+          print(f"value divergences: {len(bad)}")
+          for k, a, b in bad:
+              print(f"  {k}\n    databook: {a}\n    package : {b}")
+          print(f"declared only in the package: {pkg_only or 'none'}")
+          print(f"declared only in Databook:    {len(db_only)} (pinned at {m.DATABOOK_ONLY})")
+          sys.exit(1 if (bad or pkg_only) else 0)
+          PY
+        continue-on-error: true
+
+      - name: Report
+        if: steps.compare.outcome == 'failure' || steps.fetch.outputs.moved == 'yes'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const out = fs.readFileSync('/tmp/parity.txt', 'utf8').slice(0, 55000);
+            const diverged = '${{ steps.compare.outcome }}' === 'failure';
+            const title = diverged
+              ? 'Design tokens have DIVERGED from wegovnyc-design-tokens'
+              : 'wegovnyc-design-tokens has moved — refresh the parity snapshot';
+            const body = [
+              diverged
+                ? '⚠️ A reference token now has **different values** in Databook and the shared package. Databook is the source of truth for these values, so the usual fix is a PR to the package — but check which side actually moved.'
+                : 'The package has new commits. Databook still matches the vendored snapshot, so nothing is broken; refresh the snapshot so the guard is checking current reality.',
+              '',
+              `package HEAD: \`${{ steps.fetch.outputs.sha }}\``,
+              `snapshot:     \`${{ steps.fetch.outputs.snapshot_sha }}\``,
+              '',
+              'Refresh with:',
+              '```bash',
+              'curl -sSfL https://raw.githubusercontent.com/sarapis/wegovnyc-design-tokens/main/src/core.css \\',
+              '  > /tmp/core.css   # then re-apply the snapshot header, keeping the commit sha current',
+              'cd api && python3 -m pytest -q tests/test_design_token_parity.py',
+              '```',
+              '',
+              '<details><summary>Comparison</summary>',
+              '',
+              '```',
+              out,
+              '```',
+              '</details>',
+            ].join('\n');
+            const label = 'token-parity';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label,
+            });
+            if (existing.data.length) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, title, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+            }

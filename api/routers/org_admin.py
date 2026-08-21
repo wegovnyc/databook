@@ -42,9 +42,11 @@ basic auth on the normalizer's vhost**, a different host, and task `dda13bf3`
 records that the origin answers direct connections so any Cloudflare-layer
 policy is bypassable anyway. These endpoints therefore carry their own
 origin-level control: a valid JWT (the existing `fastapi_login` manager over the
-`users` table) whose user row has an editor `scope`, or the internal `api_key`
-for scripted use. Phase 0's real lesson was that the control must live at the
-origin — application auth is at the origin.
+`users` table) whose user row has an editor `scope`, or the internal machine key
+for scripted use — sent as the **`X-API-Key` header**, never `?api_key=` (see
+`modules/apikey.py`: uvicorn logs the full request line, so the query form
+published the secret to the container log). Phase 0's real lesson was that the
+control must live at the origin — application auth is at the origin.
 
 ⚠ `Security(manager, scopes=['write'])` is deliberately NOT used, even though
 four other endpoints use it: `/login` mints `scopes=['read']` hardcoded, so a
@@ -141,18 +143,30 @@ async def require_editor(request: Request) -> dict:
     Returns the actor dict used for the audit trail — so every mutation is
     attributable, which no store in this system has ever been.
     """
-    api_key = request.query_params.get("api_key") or request.headers.get("X-Api-Key")
+    # ⚠ HEADER FIRST, and never a raw `==`. This used to read the query
+    # parameter first and compare with `==`. Both were wrong: uvicorn logs the
+    # full request line, so the query form wrote this secret into the api's
+    # container log in plaintext on every call (the #192 exposure, which was
+    # fixed on /import-csv and /upload but MISSED here), and `==` on a str short
+    # circuits at the first differing byte. `modules.apikey` is now the single
+    # resolver for all three call sites.
+    try:
+        from modules import apikey
+    except ImportError:                                 # pragma: no cover
+        import apikey
     try:
         from config import Config
         configured = (Config.fastapi or {}).get("key") or ""
     except Exception:                                   # pragma: no cover
         configured = ""
-    if api_key and configured and api_key == configured:
+    if apikey.ok(request.headers.get("X-API-Key"),
+                 request.query_params.get("api_key"),
+                 configured):
         return {"id": None, "email": "api-key", "scope": "full"}
 
     token = (request.headers.get("Authorization") or "").replace("Bearer ", "").strip()
     if not token:
-        raise HTTPException(401, "authentication required: Bearer token or api_key")
+        raise HTTPException(401, "authentication required: Bearer token or X-API-Key")
     try:
         from main import manager
         user = await manager.get_current_user(token)
