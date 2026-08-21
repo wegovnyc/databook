@@ -283,6 +283,8 @@ Route::get('/procurement/contract/{id}', 'ProcurementController@contractProfile'
 Route::get('/procurement/solicitations', 'ProcurementController@solicitations')->name('procurement.solicitations');
 Route::get('/procurement/solicitation/{epin}', 'ProcurementController@solicitationProfile')->name('procurement.solicitation');
 Route::get('/procurement/agency/{name}', 'ProcurementController@orgProcurement')->where('name', '.*')->name('agency.procurement');
+Route::get('/procurement/renewals', 'RenewalsController@queue')->name('renewals');
+Route::get('/procurement/renewals/{contract}/story', 'RenewalsController@story')->name('renewals.story');
 Route::get('/research/digital-reform', 'ProcurementController@digitalReform')->name('research.digital-reform');
 Route::get('/research/digital-reform/expiring', 'ProcurementController@digitalReformExpiring')->name('research.digital-reform.expiring');
 // PUBLISHED 2026-08-11. Was UNLISTED (absent from the nav + noindex) from
